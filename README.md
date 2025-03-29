@@ -22,7 +22,9 @@ make run
 make clean
 ```
 
-You can customize the build with these options:
+You can find the output .dsk and .bin files in the `dist/` folder. Simply drag the .dsk file onto your Mini vMac to test.
+
+#### Other Build Parameters
 
 ```bash
 # Specify a custom Retro68 build path
@@ -42,8 +44,4 @@ make build RETRO68_PATH=/path/to/Retro68-build USE_BASILISK=ON APP_NAME=MyApp
 
 You will need to set up LaunchAPPL.cfg as documented [here](https://github.com/autc04/Retro68/tree/3672e5e663802e1956407065c75d2aff130ae50e?tab=readme-ov-file#launchappl-and-the-test-suite). Currently this supports Mini vMac and Basilisk II (I personally use Mini vMac for simplicity).
 
-### Features
-
-- Press Cmd-L to open a chat window with the AI assistant
-- Press Cmd-I when focused on a text input to get AI assistance
-- Use Cmd-I with selected text to modify only the selection
+This doesn't seem to work super well for Mini vMac at the moment due to how it copies the .app file and Gatekeeper on modern macOS.

@@ -21,13 +21,14 @@ CMAKE_OPTS = -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) \
 build:
 	mkdir -p build
 	cd build && cmake .. $(CMAKE_OPTS) && cmake --build .
+	cp build/$(APP_NAME).{dsk,bin} dist
 
 run: build
 	cd build && cmake --build . --target run
 
 clean:
 	cd build && cmake --build . --target clean || true
-	rm -rf build/*
+	rm -rf build/* dist/*
 
 # Usage examples:
 # make build RETRO68_PATH=/path/to/Retro68-build

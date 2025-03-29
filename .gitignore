@@ -8,6 +8,7 @@ cmake_install.cmake
 *.a
 *.so
 *.dylib
+dist/
 
 # macOS specific
 .DS_Store
