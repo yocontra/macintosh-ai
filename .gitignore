@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+*.o
+*.a
+*.so
+*.dylib
+
+# macOS specific
+.DS_Store
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+CLAUDE.md
