@@ -130,6 +130,6 @@ resource 'SIZE' (-1) {
     reserved,
     reserved,
     reserved,
-    256 * 1024,   /* Minimal memory size for stability */
-    512 * 1024    /* Preferred memory size */
+    512 * 1024,   /* Minimal memory size for stability */
+    800 * 1024    /* Preferred memory size */
 };

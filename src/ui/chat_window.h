@@ -6,7 +6,7 @@
 
 /* Chat Window API */
 
-/* Initialize and create the chat window */
+/* Initialize and create the chat window - must be called before ChatWindow_Show */
 void ChatWindow_Initialize(void);
 
 /* Dispose of the chat window and clean up resources */

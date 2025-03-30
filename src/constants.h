@@ -64,6 +64,7 @@ enum {
     kErrTextEditCreation = 4,
     kErrResourceNotFound = 5,
     kErrDiskFull         = 6,
+    kErrNuklearAssertion = 7,
     kErrUnknown          = 99
 };
 
