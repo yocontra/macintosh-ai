@@ -1,242 +1,266 @@
-#include <Quickdraw.h>
-#include <Windows.h>
-#include <Menus.h>
-#include <Fonts.h>
-#include <Resources.h>
-#include <TextEdit.h>
-#include <TextUtils.h>
 #include <Dialogs.h>
-#include <Devices.h>
+#include <Fonts.h>
+#include <Memory.h>
+#include <Menus.h>
+#include <Quickdraw.h>
+#include <Resources.h>
+#include <Sound.h>
+#include <TextEdit.h>
+#include <ToolUtils.h>
+#include <Windows.h>
 
-static Rect initialWindowRect, nextWindowRect;
+#include "ai_model.h"
+#include "constants.h"
+#include "error.h"
+#include "ui/chat_window.h"
+#include "ui/event.h"
+#include "ui/menu.h"
+#include "ui/splash_window.h"
+#include "ui/window_manager.h"
 
-enum
+/* Application mode tracking */
+short gAppMode = kModeMainSplash;
+
+/* Handle key down events */
+static void HandleKeyDown(EventRecord *event)
 {
-    kMenuApple = 128,
-    kMenuFile,
-    kMenuEdit
-};
+    char key = event->message & charCodeMask;
 
-enum
-{
-    kItemAbout = 1,
-
-    kItemNewDoc = 1,
-    kItemClose = 2,
-    kItemQuit = 4
-};
-
-void MakeNewWindow()
-{
-    Str255 title;
-    GetIndString(title, 128, 1);
-
-    if(nextWindowRect.bottom > qd.screenBits.bounds.bottom
-        || nextWindowRect.right > qd.screenBits.bounds.right)
-    {
-        nextWindowRect = initialWindowRect;
-    }
-
-    WindowRef w = NewWindow(NULL, &nextWindowRect, title, true, documentProc, (WindowPtr) -1, true, 0);
-
-    OffsetRect(&nextWindowRect, 15, 15);
-}
-
-void ShowAboutBox(void)
-{
-    WindowRef w = GetNewWindow(128, NULL, (WindowPtr) - 1);
-    MoveWindow(w,
-        qd.screenBits.bounds.right/2 - w->portRect.right/2,
-        qd.screenBits.bounds.bottom/2 - w->portRect.bottom/2,
-        false);
-    ShowWindow(w);
-    SetPort(w);
-
-    Handle h = GetResource('TEXT', 128);
-    HLock(h);
-    Rect r = w->portRect;
-    InsetRect(&r, 10,10);
-    TETextBox(*h, GetHandleSize(h), &r, teJustLeft);
-
-    ReleaseResource(h);
-    while(!Button())
-        ;
-    while(Button())
-        ;
-    FlushEvents(everyEvent, 0);
-    DisposeWindow(w);
-}
-
-void UpdateMenus(void)
-{
-    MenuRef m = GetMenu(kMenuFile);
-    WindowRef w = FrontWindow();
-    if(w) // Close menu item: enabled if there is a window
-        EnableItem(m,kItemClose);
-    else
-        DisableItem(m,kItemClose);
-
-    m = GetMenu(kMenuEdit);
-    if(w && GetWindowKind(w) < 0)
-    {  
-        // Desk accessory in front: Enable edit menu items
-        EnableItem(m,1);
-        EnableItem(m,3);
-        EnableItem(m,4);
-        EnableItem(m,5);
-        EnableItem(m,6);
-    }
-    else
-    {   
-        // Application window or nothing in front, disable edit menu
-        DisableItem(m,1);
-        DisableItem(m,3);
-        DisableItem(m,4);
-        DisableItem(m,5);
-        DisableItem(m,6);
-    }
-
-}
-
-void DoMenuCommand(long menuCommand)
-{
-    Str255 str;
-    WindowRef w;
-    short menuID = menuCommand >> 16;
-    short menuItem = menuCommand & 0xFFFF;
-    if(menuID == kMenuApple)
-    {
-        if(menuItem == kItemAbout)
-            ShowAboutBox();
-        else
-        {
-            GetMenuItemText(GetMenu(128), menuItem, str);
-            OpenDeskAcc(str);
+    /* Handle Command key shortcuts for both modes */
+    if (event->modifiers & cmdKey) {
+        /* Command key shortcuts */
+        if (key == 'l' || key == 'L') {
+            /* Cmd-L: Open chat window (from any mode) */
+            ChatWindow_Show(true);
+            SplashWindow_Show(false);
+            gAppMode = kModeChatWindow;
         }
-    }
-    else if(menuID == kMenuFile)
-    {
-        switch(menuItem)
-        {
-            case kItemNewDoc:
-                MakeNewWindow();
-                break;
-
-            case kItemClose:    // close
-                w = FrontWindow();
-                if(w)
-                {
-                    if(GetWindowKind(w) < 0)
-                        CloseDeskAcc(GetWindowKind(w));
-                    else
-                        DisposeWindow(FrontWindow());
-                }
-                break;
-
-            case kItemQuit:
-                ExitToShell();
-                break;
+        else {
+            /* Other command key combinations */
+            UpdateMenus();
+            DoMenuCommand(MenuKey(key));
         }
-    }
-    else if(menuID == kMenuEdit)
-    {
-        if(!SystemEdit(menuItem - 1))
-        {
-            // edit command not handled by desk accessory
-        }
+        return;
     }
 
-    HiliteMenu(0);
+    /* Handle mode-specific keyboard interactions */
+    switch (gAppMode) {
+    case kModeMainSplash:
+        /* The only action in splash mode is Cmd-L which was handled above */
+        break;
+
+    case kModeChatWindow:
+        /* Only handle chat input if the chat window is active */
+        if (ChatWindow_IsVisible() && FrontWindow() == ChatWindow_GetWindowRef()) {
+            /* Process key presses in the chat window */
+            ChatWindow_HandleKeyDown(key, (event->modifiers & shiftKey) != 0, false);
+        }
+        break;
+    }
 }
 
-void DoUpdate(WindowRef w)
+/* Handle mouse down events */
+static void HandleMouseDown(EventRecord *event)
 {
-    SetPort(w);
-    BeginUpdate(w);
+    WindowRef window;
+    short part = FindWindow(event->where, &window);
 
-    Rect r;
-    SetRect(&r, 20,20,120,120);
-    FrameOval(&r);
+    /* Process mouse click based on which part of which window was clicked */
+    switch (part) {
+    case inGoAway:
+        /* User clicked window close box */
+        if (TrackGoAway(window, event->where)) {
+            if (window == SplashWindow_GetWindowRef()) {
+                /* Closing main window quits app */
+                QuitApplication(false);
+            }
+            else if (window == ChatWindow_GetWindowRef()) {
+                /* Closing chat window returns to splash screen */
+                ChatWindow_Show(false);
+                SplashWindow_Show(true);
+                gAppMode = kModeMainSplash;
+            }
+            else {
+                DisposeWindow(window);
+            }
+        }
+        break;
 
-    OffsetRect(&r, 32, 32);
-    FillRoundRect(&r, 16, 16, &qd.ltGray);
-    FrameRoundRect(&r, 16, 16);
+    case inDrag:
+        /* User is dragging a window */
+        DragWindow(window, event->where, &qd.screenBits.bounds);
+        break;
 
-    OffsetRect(&r, 32, 32);
-    FillRect(&r, &qd.gray);
-    FrameRect(&r);
+    case inMenuBar:
+        /* User clicked in menu bar */
+        UpdateMenus();
+        DoMenuCommand(MenuSelect(event->where));
+        break;
 
-    MoveTo(100,100);
-    DrawString("\pHello, world.");
+    case inContent:
+        /* User clicked in window content */
+        if (window != FrontWindow()) {
+            /* Activate clicked window */
+            SelectWindow(window);
+        }
+        else if (window == SplashWindow_GetWindowRef()) {
+            /* Handle click inside splash window */
+            Point mousePt = event->where;
+            GlobalToLocal(&mousePt);
 
-    EndUpdate(w);
+            /* Check if start chat button was clicked */
+            if (SplashWindow_HandleContentClick(mousePt)) {
+                /* Open chat window if button was clicked */
+                ChatWindow_Show(true);
+                SplashWindow_Show(false);
+                gAppMode = kModeChatWindow;
+            }
+        }
+        else if (window == ChatWindow_GetWindowRef()) {
+            /* Handle click inside chat window */
+            Point mousePt = event->where;
+            GlobalToLocal(&mousePt);
+            ChatWindow_HandleContentClick(mousePt);
+        }
+        break;
+
+    case inSysWindow:
+        /* Handle clicks in system windows (desk accessories) */
+        SystemClick(event, window);
+        break;
+    }
 }
 
+/* Handle updates for any window */
+static void HandleWindowUpdate(WindowRef window)
+{
+    /* Route to the appropriate window module based on window reference */
+    if (window == SplashWindow_GetWindowRef()) {
+        SplashWindow_Update();
+    }
+    else if (window == ChatWindow_GetWindowRef()) {
+        ChatWindow_Update();
+    }
+}
+
+/* Handle window activation/deactivation */
+static void HandleActivate(EventRecord *event)
+{
+    WindowRef window       = (WindowRef)event->message;
+    Boolean becomingActive = (event->modifiers & activeFlag) != 0;
+
+    if (window == ChatWindow_GetWindowRef()) {
+        ChatWindow_HandleActivate(becomingActive);
+    }
+}
+
+/*********************************************************************
+ * MAIN PROGRAM
+ *********************************************************************/
+
+/* Main entry point - initial function called when application starts
+ *
+ * This initializes the Macintosh toolbox, sets up UI, and runs the main event loop.
+ * Classic Mac applications use a cooperative multitasking model where each
+ * application must regularly check for and handle system events.
+ */
 int main(void)
 {
-    InitGraf(&qd.thePort);
-    InitFonts();
-    InitWindows();
-    InitMenus();
-    TEInit();
-    InitDialogs(NULL);
+    OSErr err;
 
-    SetMenuBar(GetNewMBar(128));
-    AppendResMenu(GetMenu(128), 'DRVR');
+    /*----------------------------------------
+     * Basic Macintosh Toolbox initialization
+     *----------------------------------------*/
+    MaxApplZone(); /* Maximize heap space */
+    MoreMasters(); /* Allocate additional master pointers for handles */
+    MoreMasters(); /* Call twice to ensure plenty of master pointers */
+
+    /* Check available memory early */
+    err = CheckMemory();
+    if (err != noErr) {
+        HandleError(kErrMemoryFull, kCtxLaunchingApp, true); /* Fatal error */
+        return 1; /* Should never reach here due to fatal error */
+    }
+
+    InitGraf(&qd.thePort); /* QuickDraw */
+    InitFonts();           /* Font Manager */
+    InitWindows();         /* Window Manager */
+    InitMenus();           /* Menu Manager */
+    TEInit();              /* TextEdit */
+    InitDialogs(NULL);     /* Dialog Manager */
+    InitCursor();          /* Set arrow cursor */
+
+    /* Clear any pending events */
+    FlushEvents(everyEvent, 0);
+
+    /*----------------------------------------
+     * Setup application UI
+     *----------------------------------------*/
+    /* Set up menu bar */
+    Handle menuBar = GetNewMBar(128);
+    if (menuBar == NULL) {
+        HandleError(kErrResourceNotFound, kCtxLaunchingApp, true); /* Fatal error */
+        return 1; /* Should never reach here due to fatal error */
+    }
+
+    SetMenuBar(menuBar);
+
+    /* Get Apple menu and append desk accessories */
+    MenuHandle appleMenu = GetMenu(kMenuApple);
+    if (appleMenu == NULL) {
+        HandleError(kErrResourceNotFound, kCtxLaunchingApp, true); /* Fatal error */
+        return 1; /* Should never reach here due to fatal error */
+    }
+
+    AppendResMenu(appleMenu, 'DRVR');
     DrawMenuBar();
 
-    InitCursor();
+    /* Initialize conversation history */
+    InitConversationHistory();
 
-    Rect r;
-    SetRect(&initialWindowRect,20,60,400,260);
-    nextWindowRect = initialWindowRect;
+    /* Initialize our windows */
+    SplashWindow_Initialize();
+    ChatWindow_Initialize();
 
-    MakeNewWindow();
+    /* Show the splash window initially */
+    SplashWindow_Show(true);
+    gAppMode = kModeMainSplash;
 
-    for(;;)
-    {
-        EventRecord e;
-        WindowRef win;
-        
+    /*----------------------------------------
+     * Main event loop
+     *----------------------------------------*/
+    for (;;) {
+        EventRecord event;
+
+        /* Give time to background processes */
         SystemTask();
-        if(GetNextEvent(everyEvent, &e))
-        {
-            switch(e.what)
-            {
-                case keyDown:
-                    if(e.modifiers & cmdKey)
-                    {
-                        UpdateMenus();
-                        DoMenuCommand(MenuKey(e.message & charCodeMask));
-                    }
-                    break;
-                case mouseDown:
-                    switch(FindWindow(e.where, &win))
-                    {
-                        case inGoAway:
-                            if(TrackGoAway(win, e.where))
-                                DisposeWindow(win);
-                            break;
-                        case inDrag:
-                            DragWindow(win, e.where, &qd.screenBits.bounds);
-                            break;
-                        case inMenuBar:
-                            UpdateMenus();
-                            DoMenuCommand( MenuSelect(e.where) );
-                            break;
-                        case inContent:
-                            SelectWindow(win);
-                            break;
-                        case inSysWindow:
-                            SystemClick(&e, win);
-                            break;
-                    }
-                    break;
-                case updateEvt:
-                    DoUpdate((WindowRef)e.message);
-                    break;
+
+        /* Make the text cursor blink */
+        if (gAppMode == kModeChatWindow) {
+            ChatWindow_Idle();
+        }
+
+        /* Get and process the next event */
+        if (GetNextEvent(everyEvent, &event)) {
+            switch (event.what) {
+            case keyDown:
+                HandleKeyDown(&event);
+                break;
+
+            case mouseDown:
+                HandleMouseDown(&event);
+                break;
+
+            case activateEvt:
+                HandleActivate(&event);
+                break;
+
+            case updateEvt:
+                HandleWindowUpdate((WindowRef)event.message);
+                break;
             }
         }
     }
+
     return 0;
 }

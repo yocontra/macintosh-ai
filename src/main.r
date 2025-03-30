@@ -1,30 +1,33 @@
-#include "Processes.r"
+#include "Types.r"
 #include "Menus.r"
 #include "Windows.r"
-#include "MacTypes.r"
+#include "Dialogs.r"
 
+/* Apple menu */
 resource 'MENU' (128) {
     128, textMenuProc;
     allEnabled, enabled;
     apple;
     {
-        "About AI...", noIcon, noKey, noMark, plain;
+        "About AI Assistant...", noIcon, noKey, noMark, plain;
         "-", noIcon, noKey, noMark, plain;
     }
 };
 
+/* File menu */
 resource 'MENU' (129) {
     129, textMenuProc;
     allEnabled, enabled;
     "File";
     {
-        "New Window", noIcon, "N", noMark, plain;
+        "Chat", noIcon, "L", noMark, plain;
         "Close", noIcon, "W", noMark, plain;
         "-", noIcon, noKey, noMark, plain;
         "Quit", noIcon, "Q", noMark, plain;
     }
 };
 
+/* Edit menu */
 resource 'MENU' (130) {
     130, textMenuProc;
     0, enabled;
@@ -39,51 +42,94 @@ resource 'MENU' (130) {
     }
 };
 
+/* Menu bar definition */
 resource 'MBAR' (128) {
     { 128, 129, 130 };
 };
 
+/* String resources */
 resource 'STR#' (128) {
     {
-        "Demo Window";
+        "AI Assistant";
     }
 };
 
+/* About box text */
 data 'TEXT' (128) {
-    "About Sample\r\r"
-    "Not much to say about this."
+    "AI Assistant\r\r"
+    "AI for Macintosh\r\r"
+    "This application provides AI capabilities for your Macintosh.\r\r"
+    "Press Cmd-L to open the chat window."
 };
 
+/* About box window */
 resource 'WIND' (128) {
-    {0, 0, 220, 320}, altDBoxProc;
+    {40, 40, 260, 360}, altDBoxProc;
     invisible;
     noGoAway;
     0, "";
     noAutoCenter;
 };
 
+/* Main application window */
+resource 'WIND' (129) {
+    {40, 40, 340, 440}, documentProc;
+    visible;
+    goAway;
+    0, "AI Assistant";
+    centerMainScreen;
+};
+
+/* Chat window */
+resource 'WIND' (130) {
+    {50, 50, 400, 500}, documentProc;
+    visible;  /* Change from invisible to visible */
+    goAway;
+    0, "AI Chat";
+    centerMainScreen;
+};
+
+/* Error alert */
+resource 'ALRT' (200) {
+    {50, 50, 150, 350},
+    200,
+    {
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1
+    },
+    alertPositionMainScreen
+};
+
+resource 'DITL' (200) {
+    {
+        {70, 250, 90, 310},
+        Button { enabled, "OK" };
+        
+        {10, 10, 60, 310},
+        StaticText { enabled, "^0" };
+    }
+};
+
+/* Memory allocation */
 resource 'SIZE' (-1) {
-	reserved,
-	acceptSuspendResumeEvents,
-	reserved,
-	canBackground,
-	doesActivateOnFGSwitch,
-	backgroundAndForeground,
-	dontGetFrontClicks,
-	ignoreChildDiedEvents,
-	is32BitCompatible,
-	isHighLevelEventAware,
-	onlyLocalHLEvents,
-	notStationeryAware,
-	dontUseTextEditServices,
-	reserved,
-	reserved,
-	reserved,
-#ifdef TARGET_API_MAC_CARBON
-	500 * 1024,	// Carbon apparently needs additional memory.
-	500 * 1024
-#else
-	100 * 1024,
-	100 * 1024
-#endif
+    reserved,
+    acceptSuspendResumeEvents,
+    reserved,
+    canBackground,
+    doesActivateOnFGSwitch,
+    backgroundAndForeground,
+    dontGetFrontClicks,
+    ignoreChildDiedEvents,
+    is32BitCompatible,
+    isHighLevelEventAware,
+    onlyLocalHLEvents,
+    notStationeryAware,
+    dontUseTextEditServices,
+    reserved,
+    reserved,
+    reserved,
+    256 * 1024,   /* Minimal memory size for stability */
+    512 * 1024    /* Preferred memory size */
 };
