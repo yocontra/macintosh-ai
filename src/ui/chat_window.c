@@ -6,6 +6,7 @@
 #include <TextUtils.h>
 #include <Windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../chatbot/model_manager.h"
@@ -96,12 +97,12 @@ void ChatWindow_Initialize(void)
     Rect scrollBarRect;
     /* Adjust to match the display area exactly for proper scrolling */
     SetRect(&scrollBarRect, sContentRect.right - kResponseMargin - 16, kResponseMargin,
-            sContentRect.right - kResponseMargin, sInputRect.top - kResponseMargin - 10);
+            sContentRect.right - kResponseMargin, sInputRect.top - kResponseMargin - 15);
 
     /* Setup display area - adjust right edge to leave room for scrollbar and bottom to avoid
-     * overlapping prompt text */
+     * overlapping prompt text. Add reasonable space (15 pixels) to prevent overlap */
     SetRect(&sDisplayRect, kResponseMargin, kResponseMargin,
-            sContentRect.right - kResponseMargin - 16, sInputRect.top - kResponseMargin - 10);
+            sContentRect.right - kResponseMargin - 16, sInputRect.top - kResponseMargin - 15);
 
     /* Create a TextEdit record for the chat display with proper margins */
     Rect viewRect = sDisplayRect;
@@ -354,10 +355,17 @@ static void _UpdateScrollbarFromText(void)
     /* Standard Mac calculation: max scrolling is the content height minus view height */
     short maxScroll = 0;
     if (textHeight > viewHeight) {
-        maxScroll = textHeight - viewHeight;
+        /* Add a small buffer (3 pixels) to ensure we can scroll fully to the bottom */
+        maxScroll = textHeight - viewHeight + 3;
     }
 
-    /* If current scrolling exceeds the new max, adjust it */
+    /* Save current state for comparison */
+    short oldMaxScroll  = GetControlMaximum(sScrollBar);
+    short oldScrollPos  = GetControlValue(sScrollBar);
+    Boolean wasAtBottom = (oldScrollPos >= oldMaxScroll - 15); /* Consistent 15-pixel threshold */
+    Boolean wasDisabled = (oldMaxScroll <= 0);                 /* Disabled scrollbars have max=0 */
+
+    /* Get current scroll position */
     short currentScrollPos = GetControlValue(sScrollBar);
     if (currentScrollPos > maxScroll) {
         currentScrollPos = maxScroll;
@@ -371,12 +379,21 @@ static void _UpdateScrollbarFromText(void)
     }
     else {
         short scrollPos;
-        short oldMaxScroll  = GetControlMaximum(sScrollBar);
-        short oldScrollPos  = GetControlValue(sScrollBar);
-        Boolean wasAtBottom = (oldScrollPos >= oldMaxScroll - 5); /* Within 5 pixels of bottom */
 
-        /* Content is larger than view, enable scrollbar */
-        HiliteControl(sScrollBar, 0); /* 0 = enabled */
+        /* Content is larger than view, ensure scrollbar is enabled */
+        if (wasDisabled) {
+            /* Only call HiliteControl if actually changing state to avoid flicker */
+            HiliteControl(sScrollBar, 0); /* 0 = enabled */
+
+            /* When enabling, make sure scrollbar is visible */
+            if (sWindow != NULL) {
+                Rect scrollRect;
+                /* Get scrollbar rectangle in local coordinates */
+                scrollRect = (*sScrollBar)->contrlRect;
+                /* Force redraw of the scrollbar area */
+                InvalRect(&scrollRect);
+            }
+        }
 
         /* Set maximum value */
         SetControlMaximum(sScrollBar, maxScroll);
@@ -395,6 +412,11 @@ static void _UpdateScrollbarFromText(void)
 
         /* Update scrollbar value */
         SetControlValue(sScrollBar, scrollPos);
+
+        /* Make sure scrollbar is visible by forcing a redraw if max changed significantly */
+        if (abs(oldMaxScroll - maxScroll) > 10 && sWindow != NULL) {
+            DrawControls(sWindow);
+        }
     }
 }
 
@@ -463,6 +485,45 @@ static void DrawChatInput(void)
     Rect frameRect  = sInputRect;
     Rect shadowRect = frameRect;
     Rect innerRect  = frameRect;
+    GrafPtr savePort;
+    Rect origClip;
+
+    /* Save original clipping */
+    GetPort(&savePort);
+    origClip = savePort->clipRgn[0]->rgnBBox;
+
+    /* STEP 1: Draw the label text first, above the input area */
+    /* Create a clean label clip region with no interference */
+    Rect labelClip;
+    SetRect(&labelClip, frameRect.left, frameRect.top - 15, /* Allow enough space above the input */
+            frameRect.right, frameRect.top - 2);            /* Stop just before the input box */
+
+    ClipRect(&labelClip);
+
+    /* Clear the label area first */
+    BackColor(whiteColor);
+    EraseRect(&labelClip);
+
+    /* Draw the label with proper text settings */
+    MoveTo(frameRect.left + 5, frameRect.top - 5); /* Position text within the label area */
+    TextFont(kFontGeneva);
+    TextSize(9);
+    TextFace(bold);
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+    TextMode(srcOr);
+
+    DrawString("\pType your prompt and press Return (Shift+Return for new line):");
+    TextFace(normal);
+
+    /* STEP 2: Now draw the input box below the label */
+    /* Set clip just for the input box and its shadow */
+    Rect inputAreaClip = frameRect;
+    inputAreaClip.left -= 5;
+    inputAreaClip.right += 5;
+    inputAreaClip.bottom += 5;
+    inputAreaClip.top -= 1; /* Only allow 1 pixel above for the top border */
+    ClipRect(&inputAreaClip);
 
     /* Draw shadow effect (standard on Mac) */
     PenSize(1, 1);
@@ -472,11 +533,13 @@ static void DrawChatInput(void)
     PenNormal();
 
     /* Draw a frame around the input area */
+    ForeColor(blackColor);
     FrameRect(&frameRect);
 
     /* Draw a light background for the input field */
     InsetRect(&frameRect, 1, 1);
     BackPat(&qd.white);
+    BackColor(whiteColor);
     EraseRect(&frameRect);
 
     /* Adjust text positioning with proper inset for cursor */
@@ -484,18 +547,21 @@ static void DrawChatInput(void)
         /* Proper inset for text in Mac UI guidelines */
         innerRect = frameRect;
         InsetRect(&innerRect, 3, 3);
-        (*sInputTE)->viewRect = innerRect;
-        (*sInputTE)->destRect = innerRect;
-        TECalText(sInputTE);
+
+        /* Only update the rects if they've changed */
+        if ((*sInputTE)->viewRect.top != innerRect.top ||
+            (*sInputTE)->viewRect.left != innerRect.left ||
+            (*sInputTE)->viewRect.bottom != innerRect.bottom ||
+            (*sInputTE)->viewRect.right != innerRect.right) {
+
+            (*sInputTE)->viewRect = innerRect;
+            (*sInputTE)->destRect = innerRect;
+            TECalText(sInputTE);
+        }
     }
 
-    /* Draw prompt label */
-    MoveTo(frameRect.left - frameRect.left + 5, frameRect.top - 6);
-    TextFont(kFontGeneva);
-    TextSize(9);
-    TextFace(bold);
-    DrawString("\pType your prompt and press Return (Shift+Return for new line):");
-    TextFace(normal);
+    /* Return to standard clipping */
+    ClipRect(&origClip);
 }
 
 /* Handle mouse clicks in the content area of the chat window */
@@ -548,11 +614,29 @@ Boolean ChatWindow_HandleContentClick(Point localPt)
 
     /* Handle clicks in the chat display area */
     if (sDisplayTE != NULL && PtInRect(localPt, &sDisplayRect)) {
+        GrafPtr savePort;
+        Rect saveClip;
+
+        /* Save current clipping to limit visual effects */
+        GetPort(&savePort);
+        saveClip = savePort->clipRgn[0]->rgnBBox;
+
+        /* Limit updates to just the display area */
+        ClipRect(&sDisplayRect);
+
+        /* Get initial selection to check if it changes */
+        short oldSelStart = (*sDisplayTE)->selStart;
+        short oldSelEnd   = (*sDisplayTE)->selEnd;
+
         /* Temporarily activate for selection only, but don't show blinking cursor */
         TEActivate(sDisplayTE);
 
         /* Handle clicks in the text display - text selection */
         TEClick(localPt, false, sDisplayTE);
+
+        /* Check if selection changed */
+        Boolean selectionChanged =
+            (oldSelStart != (*sDisplayTE)->selStart || oldSelEnd != (*sDisplayTE)->selEnd);
 
         /* Immediately deactivate the display to prevent cursor from showing */
         TEDeactivate(sDisplayTE);
@@ -562,19 +646,46 @@ Boolean ChatWindow_HandleContentClick(Point localPt)
             TEActivate(sInputTE);
         }
 
-        /* Let the Render function handle all visual updates */
-        InvalRect(&sWindow->portRect);
+        /* Restore original clipping */
+        ClipRect(&saveClip);
+
+        /* Only invalidate the display area if selection changed */
+        if (selectionChanged) {
+            InvalRect(&sDisplayRect);
+        }
 
         return true;
     }
 
     /* Check if the click is in the input field */
     if (sInputTE != NULL && PtInRect(localPt, &sInputRect)) {
+        GrafPtr savePort;
+        Rect saveClip;
+
+        /* Save current clipping to limit visual effects */
+        GetPort(&savePort);
+        saveClip = savePort->clipRgn[0]->rgnBBox;
+
+        /* Limit updates to just the input area */
+        ClipRect(&sInputRect);
+
+        /* Get initial selection and cursor position to check if it changes */
+        short oldSelStart = (*sInputTE)->selStart;
+        short oldSelEnd   = (*sInputTE)->selEnd;
+
         /* Ensure the input field is active */
         TEActivate(sInputTE);
 
         /* Handle the click for text cursor positioning */
         TEClick(localPt, false, sInputTE);
+
+        /* Only invalidate if selection changed */
+        if (oldSelStart != (*sInputTE)->selStart || oldSelEnd != (*sInputTE)->selEnd) {
+            TEUpdate(&sInputRect, sInputTE);
+        }
+
+        /* Restore original clipping */
+        ClipRect(&saveClip);
 
         return true;
     }
@@ -651,38 +762,62 @@ void ChatWindow_Render(void)
     BackColor(whiteColor);
     EraseRect(&sWindow->portRect);
 
-    /* Draw the scrollbar if available */
-    if (sScrollBar != NULL) {
-        DrawControls(sWindow);
-    }
-
-    /* Draw the chat display area */
+    /* Draw a frame around the display area first (behind scrollbar) */
     if (sDisplayTE != NULL) {
-        GrafPtr savePort;
-        Rect clipSave;
-
-        /* Draw a frame around the display area */
         PenNormal();
         PenSize(1, 1);
         FrameRect(&sDisplayRect);
+    }
+
+    /* Draw the scrollbar if available */
+    if (sScrollBar != NULL) {
+        /* First check if the scrollbar should be enabled based on current content */
+        short viewHeight = 0, textHeight = 0;
+
+        if (sDisplayTE != NULL && *sDisplayTE != NULL) {
+            viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
+            textHeight = TEGetHeight(0, (*sDisplayTE)->teLength, sDisplayTE);
+
+            /* Enable or disable scrollbar based on content */
+            if (textHeight > viewHeight) {
+                HiliteControl(sScrollBar, 0); /* 0 = enabled */
+            }
+            else {
+                HiliteControl(sScrollBar, 255); /* 255 = disabled */
+            }
+        }
+
+        /* Now draw the controls */
+        DrawControls(sWindow);
+    }
+
+    /* Draw the chat display area content */
+    if (sDisplayTE != NULL) {
+        GrafPtr savePort;
+        Rect clipSave;
 
         /* Save current drawing environment */
         GetPort(&savePort);
         clipSave = savePort->clipRgn[0]->rgnBBox;
 
-        /* Create a slightly inset clip region to prevent text from touching the border */
+        /* Create proper inset for text only - don't erase the entire area which would erase the
+         * border */
         Rect textClip = sDisplayRect;
         InsetRect(&textClip, 3, 3);
-        ClipRect(&textClip);
 
-        /* Update the text content */
+        /* First set proper colors */
+        BackColor(whiteColor);
+        ForeColor(blackColor);
+
+        /* Draw the text content with proper clipping */
+        ClipRect(&textClip);
         TEUpdate(&(*sDisplayTE)->viewRect, sDisplayTE);
 
         /* Restore original clipping */
         ClipRect(&clipSave);
     }
 
-    /* Draw frame for input area */
+    /* Draw the input area with its label - DrawChatInput handles the proper drawing order */
     DrawChatInput();
 
     /* Update input text field if available */
@@ -701,8 +836,81 @@ static void ChatWindow_Update(void)
     SetPort(sWindow);
     BeginUpdate(sWindow);
 
-    /* Call the render function to draw window contents */
-    ChatWindow_Render();
+    /* Get the update region to be more selective about redraws */
+    RgnHandle updateRgn = NewRgn();
+    if (updateRgn != NULL) {
+        GetClip(updateRgn);
+
+        /* Check if display area needs updating */
+        Rect displayIntersect = sDisplayRect;
+        if (RectInRgn(&displayIntersect, updateRgn)) {
+            /* Only redraw display area parts */
+            PenNormal();
+            PenSize(1, 1);
+            FrameRect(&sDisplayRect);
+
+            /* Draw the scrollbar if in update region */
+            if (sScrollBar != NULL) {
+                Rect scrollRect = (*sScrollBar)->contrlRect;
+                if (RectInRgn(&scrollRect, updateRgn)) {
+                    DrawControls(sWindow);
+                }
+            }
+
+            /* Draw the chat display content */
+            if (sDisplayTE != NULL) {
+                GrafPtr savePort;
+                Rect clipSave;
+
+                /* Save current drawing environment */
+                GetPort(&savePort);
+                clipSave = savePort->clipRgn[0]->rgnBBox;
+
+                /* Create a properly inset clip region to prevent text from touching the border */
+                Rect textClip = sDisplayRect;
+                InsetRect(&textClip, 3, 3);
+
+                /* Set proper colors */
+                BackColor(whiteColor);
+                ForeColor(blackColor);
+
+                ClipRect(&textClip);
+
+                /* Update the text content */
+                TEUpdate(&(*sDisplayTE)->viewRect, sDisplayTE);
+
+                /* Restore original clipping */
+                ClipRect(&clipSave);
+            }
+        }
+
+        /* Check if input area or its label needs updating */
+        Rect inputIntersect   = sInputRect;
+        Rect labelIntersect   = sInputRect;
+        labelIntersect.bottom = sInputRect.top;
+        labelIntersect.top    = sInputRect.top - 15; /* Match the label area in DrawChatInput */
+
+        /* Expand input rect slightly to include borders */
+        inputIntersect.left -= 2;
+        inputIntersect.right += 2;
+        inputIntersect.top -= 2;
+        inputIntersect.bottom += 2;
+
+        if (RectInRgn(&inputIntersect, updateRgn) || RectInRgn(&labelIntersect, updateRgn)) {
+            /* DrawChatInput handles drawing both the label and input box in the correct order */
+            DrawChatInput();
+
+            if (sInputTE != NULL) {
+                TEUpdate(&sInputRect, sInputTE);
+            }
+        }
+
+        DisposeRgn(updateRgn);
+    }
+    else {
+        /* Fallback if we couldn't allocate the region */
+        ChatWindow_Render();
+    }
 
     EndUpdate(sWindow);
 }
@@ -753,12 +961,37 @@ static void ClearChatInput(void)
         return;
     }
 
-    /* Simpler approach - just set the text to empty */
-    TESetText("", 0, sInputTE);
-    TESetSelect(0, 0, sInputTE);
+    GrafPtr savePort;
+    Rect saveClip;
 
-    /* Update visually */
-    TEUpdate(&sInputRect, sInputTE);
+    /* Save current clipping to limit visual effects */
+    GetPort(&savePort);
+    saveClip = savePort->clipRgn[0]->rgnBBox;
+
+    /* Prepare the field area with proper white background before clearing */
+    Rect frameRect = sInputRect;
+    InsetRect(&frameRect, 1, 1); /* Same inset as in DrawChatInput */
+
+    /* Limit drawing to just the input field area */
+    ClipRect(&frameRect);
+
+    /* Fill with white before clearing to prevent black flash */
+    BackColor(whiteColor);
+    EraseRect(&frameRect);
+
+    /* First completely clear the field's content */
+    TESetSelect(0, 32767, sInputTE); /* Select all text */
+    TEDelete(sInputTE);              /* Delete all selected text */
+    TESetSelect(0, 0, sInputTE);     /* Place cursor at beginning */
+
+    /* Make sure the input field remains active */
+    TEActivate(sInputTE);
+
+    /* Update the TextEdit field immediately (more controlled than InvalRect) */
+    TEUpdate(&frameRect, sInputTE);
+
+    /* Restore original clipping */
+    ClipRect(&saveClip);
 }
 
 /* Format a new message with proper styling */

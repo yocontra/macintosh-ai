@@ -13,7 +13,6 @@ set(SRC_C
     src/ui/menu.c
     src/ui/event.c
     src/error.c
-    src/globals.c
     src/chatbot/markov.c
     src/chatbot/markov_data.c
     src/chatbot/openai.c
