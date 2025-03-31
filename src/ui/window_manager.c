@@ -280,14 +280,14 @@ void WindowManager_HandleEvent(EventRecord *event)
     /* Global key commands */
     if (event->what == keyDown && (event->modifiers & cmdKey)) {
         char key = event->message & charCodeMask;
-        
+
         /* Cmd-L to open chat window */
         if (key == 'l' || key == 'L') {
             WindowManager_OpenWindow(kWindowTypeChat);
             WindowManager_CloseWindow(kWindowTypeSplash);
             return;
         }
-        
+
         /* Cmd-W to close window */
         else if (key == 'w' || key == 'W') {
             WindowRef window = FrontWindow();
@@ -312,7 +312,7 @@ void WindowManager_HandleEvent(EventRecord *event)
             }
             return;
         }
-        
+
         /* Cmd-Q to quit application */
         else if (key == 'q' || key == 'Q') {
             QuitApplication(false);

@@ -26,9 +26,11 @@ static ControlHandle sScrollBar = NULL;      /* Scrollbar for chat display */
 static char sPromptBuffer[kMaxPromptLength]; /* Buffer for user prompt */
 
 /* AI model type - change this to switch between models */
-static AIModelType sActiveModel = kMarkovModel; /* Default to Markov */
+static AIModelType sActiveModel = kTemplateModel; /* Default to Template-based model */
 
 /* Private function declarations */
+static void _UpdateScrollbarFromText(void);
+static void _UpdateTextFromScrollbar(void);
 static void _UpdateChatScrollbar(void);
 static void DrawChatInput(void);
 static void ClearChatInput(void);
@@ -121,14 +123,18 @@ void ChatWindow_Initialize(void)
 
     /* Note: Classic TextEdit doesn't have the concept of "read-only" */
     /* but we don't need to process keystrokes for it since it's not active */
-    TEFeatureFlag(teFAutoScroll, teBitSet, sDisplayTE);
+    /* DISABLE auto-scrolling for display area since we're managing scrolling manually */
+    TEFeatureFlag(teFAutoScroll, teBitClear, sDisplayTE);
+
+    /* Make sure display area doesn't show cursor initially */
+    TEDeactivate(sDisplayTE);
 
     /* Create the scroll bar control with proper Mac scrollbar style */
     sScrollBar = NewControl(sWindow, &scrollBarRect, "\p", /* No title for scroll bar */
                             true,                          /* Visible */
-                            0,                             /* Initial value */
-                            0,                             /* Min value */
-                            0,                 /* Max value - will update as content grows */
+                            0,                             /* Initial value (start at top) */
+                            0,                             /* Min value (always 0) */
+                            0, /* Max value - will be set to text height - view height */
                             scrollBarProc,     /* Standard Mac scrollbar proc (16) */
                             (long)sDisplayTE); /* Store TextEdit handle as refCon */
 
@@ -155,7 +161,6 @@ void ChatWindow_Initialize(void)
 
     /* Make the input field active and set properties */
     TEActivate(sInputTE);
-    TEAutoView(true, sInputTE); /* Enable auto-scrolling */
 
     /* Set proper text attributes */
     TextFont(kFontGeneva);
@@ -165,10 +170,13 @@ void ChatWindow_Initialize(void)
 
     /* Make the text field editable with cursor properly positioned */
     TESetSelect(0, 0, sInputTE);
+
+    /* Enable auto-scrolling for the INPUT field only
+       Note: Using TEFeatureFlag is the preferred approach over TEAutoView */
     TEFeatureFlag(teFAutoScroll, teBitSet, sInputTE);
 
     /* Initialize the chat display - empty at first - call static function */
-    _UpdateChatScrollbar();
+    _UpdateScrollbarFromText(); /* Only update scrollbar, not text position */
 
     sInitialized = true;
     sIsVisible   = false; /* Window is created but not shown yet */
@@ -214,9 +222,17 @@ void ChatWindow_Dispose(void)
 /* Function to toggle between AI models */
 void ChatWindow_ToggleAIModel(void)
 {
+    /* Safety check */
+    if (!sInitialized || !sIsVisible) {
+        return;
+    }
+
     /* Toggle the model */
     if (sActiveModel == kMarkovModel) {
         sActiveModel = kOpenAIModel;
+    }
+    else if (sActiveModel == kOpenAIModel) {
+        sActiveModel = kTemplateModel;
     }
     else {
         sActiveModel = kMarkovModel;
@@ -227,19 +243,32 @@ void ChatWindow_ToggleAIModel(void)
 
     /* Inform the user about the model change */
     char modelMsg[100];
-    sprintf(modelMsg, "Switched to %s model.",
-            (sActiveModel == kMarkovModel) ? "Markov chain (local)" : "OpenAI (remote)");
+
+    if (sActiveModel == kMarkovModel) {
+        strcpy(modelMsg, "Switched to Markov chain model.");
+    }
+    else if (sActiveModel == kOpenAIModel) {
+        strcpy(modelMsg, "Switched to OpenAI model.");
+    }
+    else if (sActiveModel == kTemplateModel) {
+        strcpy(modelMsg, "Switched to Template-based model.");
+    }
 
     /* Add message to chat window */
     FormatAndAddMessage(modelMsg, false);
+
+    /* Ensure the message is visible */
+    if (sWindow != NULL) {
+        InvalRect(&sDisplayRect);
+    }
 }
 
-/* Update the chat scrollbar based on current text content */
 /* Scrollbar action procedure - handle continuous scrolling */
 static pascal void ScrollAction(ControlHandle control, short part)
 {
-    short value, min, max, delta;
+    short value, min, max;
     short oldValue;
+    short lineHeight = 12; /* Default line height */
 
     if (control == NULL || sDisplayTE == NULL || *sDisplayTE == NULL)
         return;
@@ -250,30 +279,44 @@ static pascal void ScrollAction(ControlHandle control, short part)
     min      = GetControlMinimum(control);
     max      = GetControlMaximum(control);
 
+    /* If max is 0, there's nothing to scroll */
+    if (max == 0)
+        return;
+
+    /* Try to get actual line height if possible */
+    if ((*sDisplayTE)->teLength > 0) {
+        lineHeight = TEGetHeight(0, 1, sDisplayTE);
+        if (lineHeight < 10)
+            lineHeight = 10;
+    }
+
+    /* View height is used for page scrolling */
+    short viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
+
     /* Process based on which part was clicked */
     switch (part) {
-    case inUpButton: /* Up arrow */
-        delta = -16; /* Scroll up about one line */
-        value += delta;
+    case inUpButton:
+        /* Scroll up one line */
+        value -= lineHeight;
         break;
 
-    case inDownButton: /* Down arrow */
-        delta = 16;    /* Scroll down about one line */
-        value += delta;
+    case inDownButton:
+        /* Scroll down one line */
+        value += lineHeight;
         break;
 
-    case inPageUp: /* Page up (above thumb) */
-        delta = -((*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top) * 2 / 3;
-        value += delta;
+    case inPageUp:
+        /* Scroll up one page (view height) */
+        value -= viewHeight;
         break;
 
-    case inPageDown: /* Page down (below thumb) */
-        delta = ((*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top) * 2 / 3;
-        value += delta;
+    case inPageDown:
+        /* Scroll down one page (view height) */
+        value += viewHeight;
         break;
 
     case inThumb:
-        /* For thumb drags, get the new position directly from the control */
+        /* Thumb position is already set by Control Manager */
         value = GetControlValue(control);
         break;
 
@@ -281,79 +324,137 @@ static pascal void ScrollAction(ControlHandle control, short part)
         return; /* Unknown part */
     }
 
-    /* Ensure value stays within bounds */
+    /* Keep value within bounds */
     if (value < min)
         value = min;
     if (value > max)
         value = max;
 
-    /* Only proceed if the value actually changed */
+    /* Only update if value changed */
     if (value != oldValue) {
-        /* Update control value */
         SetControlValue(control, value);
-
-        /* For safer scrolling, we'll always set the absolute position
-           rather than using relative scrolling */
-        TEScroll(0, 0, sDisplayTE);      /* First reset to top */
-        TEScroll(0, -value, sDisplayTE); /* Then scroll to position */
-
-        /* Force redraw of the text area */
+        _UpdateTextFromScrollbar();
         InvalRect(&sDisplayRect);
     }
 }
 
-/* Update the scrollbar based on current text content */
-static void _UpdateChatScrollbar(void)
+/* Update the scrollbar to reflect TextEdit content, without updating the text position */
+static void _UpdateScrollbarFromText(void)
 {
     /* Enhanced safety checks for TextEdit and ScrollBar */
     if (sScrollBar == NULL || sDisplayTE == NULL || *sDisplayTE == NULL)
         return;
 
-    /* Calculate total scrollable amount based on text height */
+    /* Standard Mac approach for TextEdit scrolling */
     short viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
 
-    /* Get the height of all text */
+    /* Get total text height through TextEdit API */
     short textHeight = TEGetHeight(0, (*sDisplayTE)->teLength, sDisplayTE);
 
-    /* Add extra padding to ensure first line is fully visible */
-    textHeight += 8;
+    /* Standard Mac calculation: max scrolling is the content height minus view height */
+    short maxScroll = 0;
+    if (textHeight > viewHeight) {
+        maxScroll = textHeight - viewHeight;
+    }
 
-    if (textHeight <= viewHeight) {
+    /* If current scrolling exceeds the new max, adjust it */
+    short currentScrollPos = GetControlValue(sScrollBar);
+    if (currentScrollPos > maxScroll) {
+        currentScrollPos = maxScroll;
+    }
+
+    if (maxScroll <= 0) {
         /* Content fits in view, disable scrollbar */
         HiliteControl(sScrollBar, 255); /* 255 = disabled */
         SetControlMaximum(sScrollBar, 0);
         SetControlValue(sScrollBar, 0);
-
-        /* Reset text view to top */
-        TEScroll(0, 0, sDisplayTE);
     }
     else {
         short scrollPos;
-        short maxScroll = textHeight - viewHeight;
+        short oldMaxScroll  = GetControlMaximum(sScrollBar);
+        short oldScrollPos  = GetControlValue(sScrollBar);
+        Boolean wasAtBottom = (oldScrollPos >= oldMaxScroll - 5); /* Within 5 pixels of bottom */
 
         /* Content is larger than view, enable scrollbar */
         HiliteControl(sScrollBar, 0); /* 0 = enabled */
 
-        /* Make sure maximum is a positive value */
-        if (maxScroll < 0)
-            maxScroll = 0;
-
         /* Set maximum value */
         SetControlMaximum(sScrollBar, maxScroll);
 
-        /* Keep scroll position at the bottom to show newest messages */
-        scrollPos = maxScroll;
+        /* Determine scroll position */
+        if (wasAtBottom || oldMaxScroll == 0) {
+            /* Auto-scroll to bottom for new messages */
+            scrollPos = maxScroll;
+        }
+        else {
+            /* Keep same position if possible */
+            scrollPos = oldScrollPos;
+            if (scrollPos > maxScroll)
+                scrollPos = maxScroll;
+        }
 
-        /* Update thumb position */
+        /* Update scrollbar value */
         SetControlValue(sScrollBar, scrollPos);
-
-        /* Reset position and scroll to show latest messages */
-        TEScroll(0, 0, sDisplayTE);          /* Reset to top */
-        TEScroll(0, -scrollPos, sDisplayTE); /* Scroll to bottom */
-
-        /* Invalidate to ensure proper redraw */
-        InvalRect(&sDisplayRect);
     }
+}
+
+/* Update the TextEdit content to reflect scrollbar position */
+static void _UpdateTextFromScrollbar(void)
+{
+    /* Enhanced safety checks for TextEdit and ScrollBar */
+    if (sScrollBar == NULL || sDisplayTE == NULL || *sDisplayTE == NULL)
+        return;
+
+    /* Get current scrollbar value */
+    short scrollPos = GetControlValue(sScrollBar);
+
+    /* Calculate current position to reduce visual jumping */
+    short currentPos = (*sDisplayTE)->viewRect.top - (*sDisplayTE)->destRect.top;
+    short delta      = currentPos - scrollPos;
+
+    /* Only scroll if position actually changed */
+    if (delta != 0) {
+        /* Single TEScroll call with the delta is more efficient and reduces flicker */
+        TEScroll(0, delta, sDisplayTE);
+    }
+}
+
+/* Update both scrollbar and text to maintain consistency */
+static void _UpdateChatScrollbar(void)
+{
+    static Boolean isUpdating = false;
+
+    /* Prevent recursive calls that could cause infinite scrolling */
+    if (isUpdating) {
+        return;
+    }
+
+    isUpdating = true;
+
+    /* First update scrollbar values based on text content */
+    _UpdateScrollbarFromText();
+
+    /* Then update text position to match scrollbar */
+    _UpdateTextFromScrollbar();
+
+    /* Only invalidate the display area if window exists */
+    if (sWindow != NULL) {
+        /* Use ClipRect to limit redraw to just the display area for better performance */
+        GrafPtr savePort;
+        Rect saveClip;
+
+        GetPort(&savePort);
+        saveClip = savePort->clipRgn[0]->rgnBBox;
+
+        /* Limit redraw to just the display area */
+        ClipRect(&sDisplayRect);
+        InvalRect(&sDisplayRect);
+
+        /* Restore original clipping */
+        ClipRect(&saveClip);
+    }
+
+    isUpdating = false;
 }
 
 /* Draw the chat input field */
@@ -413,49 +514,68 @@ Boolean ChatWindow_HandleContentClick(Point localPt)
 
         /* Check if the click was in our scrollbar */
         if (part && clickedControl == sScrollBar) {
-            /* Handle scrolling with appropriate action */
-            if (part == inThumb) {
-                /* For thumb dragging, we use a specific approach */
-                short oldValue = GetControlValue(sScrollBar);
+            /* Make sure scrollbar is active before handling clicks */
+            if (GetControlMaximum(sScrollBar) > 0) {
+                /* Handle scrolling with appropriate action */
+                if (part == inThumb) {
+                    /* For thumb dragging, we use a specific approach */
+                    short oldValue = GetControlValue(sScrollBar);
 
-                /* Track without action proc for thumb */
-                part = TrackControl(clickedControl, localPt, NULL);
+                    /* Track without action proc for thumb */
+                    part = TrackControl(clickedControl, localPt, NULL);
 
-                if (part) {
-                    /* After tracking completes, get new position and scroll */
-                    short newValue = GetControlValue(sScrollBar);
+                    if (part) {
+                        /* After tracking completes, get new position and scroll */
+                        short newValue = GetControlValue(sScrollBar);
 
-                    if (newValue != oldValue) {
-                        /* Scroll to the new position */
-                        TEScroll(0, 0, sDisplayTE);         /* Reset to top */
-                        TEScroll(0, -newValue, sDisplayTE); /* Then to position */
+                        if (newValue != oldValue) {
+                            /* Update text position to match the new scrollbar value */
+                            _UpdateTextFromScrollbar();
 
-                        /* Force redraw */
-                        InvalRect(&sDisplayRect);
+                            /* Force redraw */
+                            InvalRect(&sDisplayRect);
+                        }
                     }
                 }
+                else {
+                    /* For other parts, use our action proc */
+                    part = TrackControl(clickedControl, localPt, (ControlActionUPP)ScrollAction);
+                }
             }
-            else {
-                /* For other parts, use our action proc */
-                part = TrackControl(clickedControl, localPt, (ControlActionUPP)ScrollAction);
-            }
-            return true;
+            return true; /* Click was in scrollbar area, so we handled it */
         }
     }
 
     /* Handle clicks in the chat display area */
     if (sDisplayTE != NULL && PtInRect(localPt, &sDisplayRect)) {
+        /* Temporarily activate for selection only, but don't show blinking cursor */
+        TEActivate(sDisplayTE);
+
         /* Handle clicks in the text display - text selection */
         TEClick(localPt, false, sDisplayTE);
 
-        /* Force redraw to show changes */
-        InvalRect(&sDisplayRect);
+        /* Immediately deactivate the display to prevent cursor from showing */
+        TEDeactivate(sDisplayTE);
+
+        /* Make sure input field has focus for typing */
+        if (sInputTE != NULL) {
+            TEActivate(sInputTE);
+        }
+
+        /* Let the Render function handle all visual updates */
+        InvalRect(&sWindow->portRect);
+
         return true;
     }
 
     /* Check if the click is in the input field */
     if (sInputTE != NULL && PtInRect(localPt, &sInputRect)) {
+        /* Ensure the input field is active */
+        TEActivate(sInputTE);
+
+        /* Handle the click for text cursor positioning */
         TEClick(localPt, false, sInputTE);
+
         return true;
     }
 
@@ -498,13 +618,11 @@ void ChatWindow_HandleActivate(Boolean becomingActive)
     }
 
     if (becomingActive) {
-        /* Window being activated */
+        /* Window being activated - only activate the input field */
         if (sInputTE != NULL) {
             TEActivate(sInputTE);
         }
-        if (sDisplayTE != NULL) {
-            TEActivate(sDisplayTE);
-        }
+        /* Chat display should NEVER be activated - we don't want cursor there */
     }
     else {
         /* Window being deactivated */
@@ -515,6 +633,9 @@ void ChatWindow_HandleActivate(Boolean becomingActive)
             TEDeactivate(sDisplayTE);
         }
     }
+
+    /* Force window redraw on activation state change */
+    InvalRect(&sWindow->portRect);
 }
 
 /* Render the chat window contents */
@@ -644,15 +765,40 @@ static void ClearChatInput(void)
 static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
 {
     char formattedMsg[kMaxPromptLength + 100]; /* Extra space for formatting */
-    char lineBuffer[80];                       /* Buffer for a single line of the header */
     short msgLength;
+    static Boolean isAdding = false; /* Prevent recursive calls */
 
-    if (message == NULL || sDisplayTE == NULL)
+    /* Track scroll state */
+    short oldScrollPos  = 0;
+    short maxScroll     = 0;
+    Boolean wasAtBottom = true; /* Default to auto-scrolling */
+
+    /* Prevent recursion through RefreshConversationDisplay */
+    if (isAdding) {
         return;
+    }
+
+    isAdding = true;
+
+    if (message == NULL || sDisplayTE == NULL || *sDisplayTE == NULL) {
+        isAdding = false;
+        return;
+    }
 
     /* Safety check for message length */
-    if (strlen(message) == 0 || strlen(message) >= kMaxPromptLength)
+    if (strlen(message) == 0 || strlen(message) >= kMaxPromptLength) {
+        isAdding = false;
         return;
+    }
+
+    /* Check if user was at the bottom before adding message (for auto-scroll) */
+    if (sScrollBar != NULL) {
+        maxScroll    = GetControlMaximum(sScrollBar);
+        oldScrollPos = GetControlValue(sScrollBar);
+
+        /* More generous threshold of 15 pixels to detect "near bottom" */
+        wasAtBottom = (oldScrollPos >= maxScroll - 15);
+    }
 
     /* Format the message with proper header and indentation using safer string operations */
     memset(formattedMsg, 0, sizeof(formattedMsg)); /* Clear entire buffer */
@@ -678,63 +824,88 @@ static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
         /* Simplified header */
         strncat(formattedMsg, "You: ", remainingSpace);
         remainingSpace -= strlen("You: ");
-
-        /* Add truncated message safely */
-        strncat(formattedMsg, message,
-                (safeMessageLen < remainingSpace) ? safeMessageLen : remainingSpace);
-        remainingSpace -= ((safeMessageLen < remainingSpace) ? safeMessageLen : remainingSpace);
     }
     else {
         /* Simplified header */
         strncat(formattedMsg, "AI: ", remainingSpace);
         remainingSpace -= strlen("AI: ");
-
-        /* Add truncated message safely */
-        strncat(formattedMsg, message,
-                (safeMessageLen < remainingSpace) ? safeMessageLen : remainingSpace);
-        remainingSpace -= ((safeMessageLen < remainingSpace) ? safeMessageLen : remainingSpace);
     }
 
-    /* Add the formatted message to the TextEdit field */
-    /* First save current selection */
-    short selStart = (*sDisplayTE)->selStart;
-    short selEnd   = (*sDisplayTE)->selEnd;
+    /* Add truncated message safely */
+    strncat(formattedMsg, message,
+            (safeMessageLen < remainingSpace) ? safeMessageLen : remainingSpace);
+
+    /* Save current selection for possible restoration */
+    short selStart       = (*sDisplayTE)->selStart;
+    short selEnd         = (*sDisplayTE)->selEnd;
+    Boolean hasSelection = (selStart < selEnd);
+
+    /* Set text style before inserting */
+    TextFont(kFontMonaco); /* Monaco is monospaced and works better for ASCII art */
+    TextSize(10);
+
+    if (isUserMessage) {
+        TextFace(bold);
+    }
+    else {
+        TextFace(normal);
+    }
+
+    /* Use clipping to reduce flicker during text insertion */
+    GrafPtr savePort;
+    Rect saveClip;
+    GetPort(&savePort);
+    saveClip = savePort->clipRgn[0]->rgnBBox;
+
+    /* Limit updates to just the display area while modifying text */
+    ClipRect(&sDisplayRect);
 
     /* Insert the new message at the end */
     msgLength = strlen(formattedMsg);
     TESetSelect(32767, 32767, sDisplayTE); /* Move to end */
-
-    /* Set text style for the message */
-    TextFont(kFontMonaco); /* Monaco is monospaced and works better for ASCII art */
-
-    if (isUserMessage) {
-        TextFace(bold);
-        TextSize(10); /* Slightly smaller for better fit */
-    }
-    else {
-        TextFace(normal);
-        TextSize(10);
-    }
-
-    /* Insert the text */
     TEInsert(formattedMsg, msgLength, sDisplayTE);
 
-    /* Restore original selection if it was valid */
-    if (selStart < selEnd && selEnd <= (*sDisplayTE)->teLength - msgLength) {
+    /* Update the scrollbar values to reflect new content */
+    _UpdateScrollbarFromText();
+
+    /* Unified approach to scroll position: use the same logic as RefreshConversationDisplay */
+    if (wasAtBottom) {
+        /* Auto-scroll to bottom */
+        if (sScrollBar != NULL) {
+            SetControlValue(sScrollBar, GetControlMaximum(sScrollBar));
+        }
+    }
+    else if (hasSelection && selEnd <= (*sDisplayTE)->teLength - msgLength) {
+        /* Maintain selection */
         TESetSelect(selStart, selEnd, sDisplayTE);
+
+        /* Restore original scroll position */
+        if (sScrollBar != NULL) {
+            SetControlValue(sScrollBar, oldScrollPos);
+        }
     }
     else {
-        /* Keep selection at end to ensure visibility */
-        TESetSelect(32767, 32767, sDisplayTE);
+        /* Maintain scroll position for reading previous content */
+        if (sScrollBar != NULL) {
+            SetControlValue(sScrollBar, oldScrollPos);
+        }
     }
 
-    /* Update the scrollbar to reflect new content */
-    _UpdateChatScrollbar();
+    /* Update the text position to match scrollbar */
+    _UpdateTextFromScrollbar();
 
-    /* Force window update to show changes immediately */
+    /* Restore original clipping */
+    ClipRect(&saveClip);
+
+    /* Make sure display area never shows cursor */
+    TEDeactivate(sDisplayTE);
+
+    /* Limit redraw to just the display area for better performance */
     if (sWindow != NULL) {
-        InvalRect(&sDisplayRect);
+        InvalRect(&sDisplayRect); /* Only invalidate display area, not entire window */
     }
+
+    isAdding = false;
 }
 
 /* Send a message from the chat input field */
@@ -742,6 +913,8 @@ void ChatWindow_SendMessage(void)
 {
     char promptBuffer[kMaxPromptLength];
     char *response;
+    short thinkingMsgStart = 0;
+    short thinkingMsgEnd   = 0;
 
     /* Additional safety checks to prevent crashes */
     if (!sInitialized || sWindow == NULL || sInputTE == NULL || sDisplayTE == NULL) {
@@ -780,29 +953,65 @@ void ChatWindow_SendMessage(void)
     /* Add the user message to display */
     FormatAndAddMessage(promptBuffer, true); /* true = user message */
 
-    /* Add temporary "Thinking..." indicator */
+    /* Limit visual updates during thinking indicator */
+    GrafPtr savePort;
+    Rect saveClip;
+    GetPort(&savePort);
+    saveClip = savePort->clipRgn[0]->rgnBBox;
+
+    /* Remember the position before adding thinking indicator */
+    if (sDisplayTE != NULL && *sDisplayTE != NULL) {
+        thinkingMsgStart = (*sDisplayTE)->teLength;
+    }
+
+    /* Add temporary "Thinking..." indicator directly at end of text */
     char thinkingMsg[80];
     sprintf(thinkingMsg, "Processing your query...");
 
     /* Add thinking message to display (but NOT to conversation history) */
+    ClipRect(&sDisplayRect);
     FormatAndAddMessage(thinkingMsg, false); /* false = AI message */
 
-    /* Ensure the thinking message is visible by forcing a redraw */
+    /* Remember where the thinking message ends */
+    if (sDisplayTE != NULL && *sDisplayTE != NULL) {
+        thinkingMsgEnd = (*sDisplayTE)->teLength;
+    }
+
+    /* Ensure the thinking message is visible with targeted redraw */
     InvalRect(&sDisplayRect);
+    ClipRect(&saveClip);
 
     /* Generate AI response using the selected model */
     response = GenerateAIResponse(&gConversationHistory);
 
-    /* Add AI response to conversation history */
-    AddAIResponse(response);
+    /* Remove the temporary thinking message directly */
+    if (sDisplayTE != NULL && *sDisplayTE != NULL && thinkingMsgStart < thinkingMsgEnd) {
+        /* Use clipping to reduce flicker when removing thinking message */
+        ClipRect(&sDisplayRect);
 
-    /* Fully refresh the conversation display - this ensures all messages are shown
-       and completely removes the temporary thinking message */
-    RefreshConversationDisplay();
+        /* Delete the thinking message by replacing with empty string */
+        TESetSelect(thinkingMsgStart, thinkingMsgEnd, sDisplayTE);
+        TEDelete(sDisplayTE);
 
-    /* Update the display if window is still valid */
+        /* Reset any selections */
+        TESetSelect(thinkingMsgEnd, thinkingMsgEnd, sDisplayTE);
+
+        /* Add the real response directly - more efficient than a full refresh */
+        AddAIResponse(response);
+        FormatAndAddMessage(response, false); /* false = AI message */
+
+        /* Restore original clipping */
+        ClipRect(&saveClip);
+    }
+    else {
+        /* Fallback if direct removal fails */
+        AddAIResponse(response);
+        RefreshConversationDisplay();
+    }
+
+    /* Targeted invalidation of just the display area */
     if (sWindow != NULL) {
-        InvalRect(&sWindow->portRect);
+        InvalRect(&sDisplayRect);
     }
 }
 
@@ -828,29 +1037,141 @@ TEHandle ChatWindow_GetInputTE(void)
 static void RefreshConversationDisplay(void)
 {
     short i, idx;
-    short maxMessages = gConversationHistory.count;
+    short maxMessages           = gConversationHistory.count;
+    static Boolean isRefreshing = false; /* Prevent recursive refreshes */
 
-    /* Safety check */
-    if (!sInitialized || sDisplayTE == NULL) {
+    /* Prevent recursive refreshes that could cause infinite scrolling loops */
+    if (isRefreshing) {
         return;
     }
+
+    isRefreshing = true;
+
+    /* Safety check */
+    if (!sInitialized || sDisplayTE == NULL || *sDisplayTE == NULL) {
+        isRefreshing = false;
+        return;
+    }
+
+    /* Store current scroll position information before clearing */
+    short oldMaxScroll   = 0;
+    short oldScrollPos   = 0;
+    Boolean wasAtBottom  = true; /* Default to scrolling to bottom */
+    Boolean hasSelection = false;
+    short selStart = 0, selEnd = 0;
+
+    /* Save current selection state */
+    if (sDisplayTE != NULL && *sDisplayTE != NULL) {
+        selStart     = (*sDisplayTE)->selStart;
+        selEnd       = (*sDisplayTE)->selEnd;
+        hasSelection = (selStart < selEnd);
+    }
+
+    if (sScrollBar != NULL) {
+        oldMaxScroll = GetControlMaximum(sScrollBar);
+        oldScrollPos = GetControlValue(sScrollBar);
+
+        /* Consistent with FormatAndAddMessage, use 15 pixel threshold */
+        wasAtBottom = (oldScrollPos >= oldMaxScroll - 15);
+    }
+
+    /* Use clipping to reduce flicker during text rebuild */
+    GrafPtr savePort;
+    Rect saveClip;
+    GetPort(&savePort);
+    SetPort(sWindow);
+    saveClip = sWindow->clipRgn[0]->rgnBBox;
+
+    /* Limit updates to just the display area */
+    ClipRect(&sDisplayRect);
 
     /* Clear the text display first */
     TESetText("", 0, sDisplayTE);
 
-    /* Display all messages from the conversation history in chronological order */
+    /* First build up all the text content without scrolling */
     for (i = 0; i < maxMessages; i++) {
         /* Calculate the index using the circular buffer logic - start at head and wrap around */
         idx = (gConversationHistory.head + i) % kMaxConversationHistory;
 
         ConversationMessage *msg = &gConversationHistory.messages[idx];
         if (msg->text[0] != '\0') {
-            FormatAndAddMessage(msg->text, msg->type == kUserMessage);
+            /* Format message for display */
+            char formattedMsg[kMaxPromptLength + 100]; /* Extra space for formatting */
+            short msgLength;
+
+            /* Format the message with proper header and indentation */
+            memset(formattedMsg, 0, sizeof(formattedMsg)); /* Clear entire buffer */
+
+            /* Add header and message */
+            if (msg->type == kUserMessage) {
+                strcat(formattedMsg, "\rYou: ");
+                strcat(formattedMsg, msg->text);
+            }
+            else {
+                strcat(formattedMsg, "\rAI: ");
+                strcat(formattedMsg, msg->text);
+            }
+
+            /* Set text style */
+            TextFont(kFontMonaco);
+            TextSize(10);
+
+            if (msg->type == kUserMessage) {
+                TextFace(bold);
+            }
+            else {
+                TextFace(normal);
+            }
+
+            /* Add to display */
+            msgLength = strlen(formattedMsg);
+            TESetSelect(32767, 32767, sDisplayTE);
+            TEInsert(formattedMsg, msgLength, sDisplayTE);
         }
     }
 
-    /* Make sure we're scrolled to show the most recent messages */
-    _UpdateChatScrollbar();
+    /* Update scrollbar based on current text content */
+    _UpdateScrollbarFromText();
+
+    /* Use consistent scroll position logic with FormatAndAddMessage */
+    if (wasAtBottom) {
+        /* Auto-scroll to bottom */
+        if (sScrollBar != NULL) {
+            SetControlValue(sScrollBar, GetControlMaximum(sScrollBar));
+        }
+    }
+    else {
+        /* When refreshing, we can't maintain exact position and selection,
+           so we use proportional scrolling to maintain relative position */
+        short newMaxScroll = GetControlMaximum(sScrollBar);
+
+        if (oldMaxScroll > 0 && newMaxScroll > 0) {
+            /* Calculate relative position and apply to new content */
+            float scrollRatio  = (float)oldScrollPos / (float)oldMaxScroll;
+            short newScrollPos = (short)(scrollRatio * newMaxScroll);
+
+            /* Ensure we stay within valid range */
+            if (newScrollPos > newMaxScroll)
+                newScrollPos = newMaxScroll;
+            if (newScrollPos < 0)
+                newScrollPos = 0;
+
+            /* Apply the new position */
+            SetControlValue(sScrollBar, newScrollPos);
+        }
+    }
+
+    /* Update text position to match scrollbar */
+    _UpdateTextFromScrollbar();
+
+    /* Ensure display is still deactivated */
+    TEDeactivate(sDisplayTE);
+
+    /* Restore original clipping and trigger a focused redraw */
+    ClipRect(&saveClip);
+    InvalRect(&sDisplayRect);
+
+    isRefreshing = false;
 }
 
 /* Show or hide the chat window */
@@ -910,8 +1231,15 @@ void ChatWindow_Idle(void)
         return;
     }
 
-    /* Standard idle processing */
+    /* Only do idle processing for input field - this is where cursor blinks */
     if (sInputTE != NULL) {
         TEIdle(sInputTE);
+    }
+
+    /* Explicitly NOT calling TEIdle for display area to avoid cursor */
+
+    /* Ensure display area remains deactivated (no cursor) but don't adjust scrolling */
+    if (sDisplayTE != NULL) {
+        TEDeactivate(sDisplayTE);
     }
 }

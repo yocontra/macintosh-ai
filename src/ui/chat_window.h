@@ -5,7 +5,17 @@
 #include <Quickdraw.h>
 #include <Windows.h>
 
-/* Chat Window API */
+/* Chat Window API
+ *
+ * This module implements a scrollable chat window with a fixed input field
+ * at the bottom and a scrollable conversation history display at the top.
+ *
+ * Key design considerations:
+ * - Optimized TEScroll implementation for smooth scrolling
+ * - Proper clipping to reduce flicker during text updates
+ * - Consistent scroll position maintenance between operations
+ * - Efficient "thinking" indicator that avoids full refreshes
+ */
 
 /* Initialize and create the chat window */
 void ChatWindow_Initialize(void);

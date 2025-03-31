@@ -4,7 +4,7 @@
 #include "markov.h"
 
 /* AI Model types */
-typedef enum { kMarkovModel = 0, kOpenAIModel = 1 } AIModelType;
+typedef enum { kMarkovModel = 0, kOpenAIModel = 1, kTemplateModel = 2 } AIModelType;
 
 /* Global conversation history */
 extern ConversationHistory gConversationHistory;

@@ -18,6 +18,8 @@ set(SRC_C
     src/chatbot/markov_data.c
     src/chatbot/openai.c
     src/chatbot/model_manager.c
+    src/chatbot/template.c
+    src/chatbot/template_data.c
     src/ui/splash_window.c
     src/ui/chat_window.c
     src/ui/about_window.c
@@ -35,6 +37,8 @@ set(HEADER_FILES
     src/chatbot/markov.h
     src/chatbot/markov_data.h
     src/chatbot/openai.h
+    src/chatbot/template.h
+    src/chatbot/template_data.h
     src/chatbot/ai_model_interface.h
     src/ui/splash_window.h
     src/ui/chat_window.h

@@ -6,6 +6,7 @@
 #include "markov.h"
 #include "model_manager.h"
 #include "openai.h"
+#include "template.h"
 
 /* Global conversation history */
 ConversationHistory gConversationHistory;
@@ -27,7 +28,7 @@ void InitModels(void)
     gConversationHistory.isFull = 0;
     memset(gConversationHistory.messages, 0, sizeof(ConversationMessage) * kMaxConversationHistory);
 
-    /* Initialize the Markov model if not already initialized */
+    /* Initialize the selected model if not already initialized */
     if (!gModelsInitialized) {
         if (gActiveAIModel == kMarkovModel) {
             InitMarkovModel();
@@ -35,13 +36,23 @@ void InitModels(void)
         else if (gActiveAIModel == kOpenAIModel) {
             InitOpenAI();
         }
+        else if (gActiveAIModel == kTemplateModel) {
+            InitTemplateModel();
+        }
 
         gModelsInitialized = true;
     }
 
     /* Add welcome message to the conversation history */
-    sprintf(welcomeMsg, "AI initialized! Using %s model. How can I help you today?",
-            (gActiveAIModel == kMarkovModel) ? "Markov chain (local)" : "OpenAI (remote)");
+    if (gActiveAIModel == kMarkovModel) {
+        strcpy(welcomeMsg, "AI initialized! Using Markov chain model. How can I help you today?");
+    }
+    else if (gActiveAIModel == kOpenAIModel) {
+        strcpy(welcomeMsg, "AI initialized! Using OpenAI model. How can I help you today?");
+    }
+    else if (gActiveAIModel == kTemplateModel) {
+        strcpy(welcomeMsg, "AI initialized! Using Template-based model. How can I help you today?");
+    }
 
     AddAIResponse(welcomeMsg);
 }
@@ -49,7 +60,21 @@ void InitModels(void)
 /* Set the active AI model */
 void SetActiveAIModel(AIModelType modelType)
 {
-    gActiveAIModel = modelType;
+    /* Only change model and initialize if it's a different model */
+    if (gActiveAIModel != modelType) {
+        gActiveAIModel = modelType;
+
+        /* Initialize the newly selected model */
+        if (modelType == kMarkovModel) {
+            InitMarkovModel();
+        }
+        else if (modelType == kOpenAIModel) {
+            InitOpenAI();
+        }
+        else if (modelType == kTemplateModel) {
+            InitTemplateModel();
+        }
+    }
 }
 
 /* Generate AI response based on active model */
@@ -60,6 +85,9 @@ char *GenerateAIResponse(const ConversationHistory *history)
     }
     if (gActiveAIModel == kOpenAIModel) {
         return GenerateOpenAIResponse(history);
+    }
+    if (gActiveAIModel == kTemplateModel) {
+        return GenerateTemplateResponse(history);
     }
 
     /* Default case to avoid missing return */
