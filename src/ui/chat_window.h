@@ -1,6 +1,7 @@
 #ifndef CHAT_WINDOW_H
 #define CHAT_WINDOW_H
 
+#include <Events.h>
 #include <Quickdraw.h>
 #include <Windows.h>
 
@@ -12,17 +13,11 @@ void ChatWindow_Initialize(void);
 /* Dispose of the chat window and clean up resources */
 void ChatWindow_Dispose(void);
 
+/* Handle all events for the chat window */
+void ChatWindow_HandleEvent(EventRecord *event);
+
 /* Handle update events for the chat window */
 void ChatWindow_Update(void);
-
-/* Handle mouse clicks in the content area of the chat window */
-Boolean ChatWindow_HandleContentClick(Point localPt);
-
-/* Handle key events in the chat window */
-Boolean ChatWindow_HandleKeyDown(char key, Boolean isShiftDown, Boolean isCmdDown);
-
-/* Handle window activation/deactivation events */
-void ChatWindow_HandleActivate(Boolean becomingActive);
 
 /* Get the window reference for the chat window */
 WindowRef ChatWindow_GetWindowRef(void);
@@ -39,8 +34,8 @@ void ChatWindow_Show(Boolean visible);
 /* Determine if the window is visible */
 Boolean ChatWindow_IsVisible(void);
 
-/* Process Return key in the chat input field */
-void ChatWindow_ProcessReturnKey(void);
+/* Send a message from the chat input field */
+void ChatWindow_SendMessage(void);
 
 /* Add a message to the chat display */
 void ChatWindow_AddMessage(const char *message, Boolean isUserMessage);

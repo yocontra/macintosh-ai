@@ -1,3 +1,4 @@
+#include <Events.h>
 #include <Resources.h>
 #include <TextEdit.h>
 #include <Windows.h>
@@ -6,12 +7,32 @@
 #include "../error.h"
 #include "about_window.h"
 
+/* Track if the about dialog is currently open */
+static Boolean sIsAboutOpen = false;
+
+/* Handle events for the about box (if visible) */
+void AboutWindow_HandleEvent(EventRecord *event)
+{
+    /* Only process events if the about dialog is open */
+    if (sIsAboutOpen) {
+        if (event->what == mouseDown) {
+            /* Any click anywhere in the about box will dismiss it */
+            sIsAboutOpen = false;
+        }
+    }
+}
+
 /* Show the About box dialog with app information */
 void ShowAboutBox(void)
 {
     WindowRef w;
     Handle h;
     OSErr err;
+
+    /* If about box is already open, don't show another one */
+    if (sIsAboutOpen) {
+        return;
+    }
 
     /* Check memory */
     err = CheckMemory();
@@ -47,11 +68,6 @@ void ShowAboutBox(void)
     TETextBox(*h, GetHandleSize(h), &r, teJustLeft);
     ReleaseResource(h);
 
-    /* Wait for user click to dismiss */
-    while (!Button())
-        ;
-    while (Button())
-        ;
-    FlushEvents(everyEvent, 0);
-    DisposeWindow(w);
+    /* Mark that the about box is open */
+    sIsAboutOpen = true;
 }

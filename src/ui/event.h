@@ -4,6 +4,9 @@
 #include <Events.h>
 #include <Windows.h>
 
+/* Forward declarations */
+void InitConversationHistory(void);
+
 /* Application shutdown */
 void QuitApplication(Boolean saveChanges);
 

@@ -48,7 +48,7 @@ void ChatWindow_Initialize(void)
     if (sInitialized) {
         return;
     }
-    
+
     /* Initialize conversation history if needed */
     InitConversationHistory();
 
@@ -91,23 +91,22 @@ void ChatWindow_Initialize(void)
     /* Create a vertical scroll bar for the chat display - width is 16 pixels */
     Rect scrollBarRect;
     /* Adjust to match the display area exactly for proper scrolling */
-    SetRect(&scrollBarRect, sContentRect.right - kResponseMargin - 16, kResponseMargin, 
-            sContentRect.right - kResponseMargin, 
-            sInputRect.top - kResponseMargin - 10);
-            
-    /* Setup display area - adjust right edge to leave room for scrollbar and bottom to avoid overlapping prompt text */
-    SetRect(&sDisplayRect, kResponseMargin, kResponseMargin, 
-            sContentRect.right - kResponseMargin - 16,
-            sInputRect.top - kResponseMargin - 10);
+    SetRect(&scrollBarRect, sContentRect.right - kResponseMargin - 16, kResponseMargin,
+            sContentRect.right - kResponseMargin, sInputRect.top - kResponseMargin - 10);
+
+    /* Setup display area - adjust right edge to leave room for scrollbar and bottom to avoid
+     * overlapping prompt text */
+    SetRect(&sDisplayRect, kResponseMargin, kResponseMargin,
+            sContentRect.right - kResponseMargin - 16, sInputRect.top - kResponseMargin - 10);
 
     /* Create a TextEdit record for the chat display with proper margins */
     Rect viewRect = sDisplayRect;
     Rect destRect = sDisplayRect;
-    
+
     /* Add small inset to create margin */
     InsetRect(&viewRect, 4, 4);
     InsetRect(&destRect, 4, 4);
-    
+
     /* Create with adjusted rects */
     sDisplayTE = TENew(&destRect, &viewRect);
     if (sDisplayTE == NULL) {
@@ -216,63 +215,63 @@ static pascal void ScrollAction(ControlHandle control, short part)
 {
     short value, min, max, delta;
     short oldValue;
-    
+
     if (control == NULL || sDisplayTE == NULL || *sDisplayTE == NULL)
         return;
-    
+
     /* Get current control values */
     oldValue = GetControlValue(control);
-    value = oldValue;
-    min   = GetControlMinimum(control);
-    max   = GetControlMaximum(control);
-    
+    value    = oldValue;
+    min      = GetControlMinimum(control);
+    max      = GetControlMaximum(control);
+
     /* Process based on which part was clicked */
     switch (part) {
     case inUpButton: /* Up arrow */
         delta = -16; /* Scroll up about one line */
         value += delta;
         break;
-        
+
     case inDownButton: /* Down arrow */
         delta = 16;    /* Scroll down about one line */
         value += delta;
         break;
-        
+
     case inPageUp: /* Page up (above thumb) */
         delta = -((*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top) * 2 / 3;
         value += delta;
         break;
-        
+
     case inPageDown: /* Page down (below thumb) */
         delta = ((*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top) * 2 / 3;
         value += delta;
         break;
-        
+
     case inThumb:
         /* For thumb drags, get the new position directly from the control */
         value = GetControlValue(control);
         break;
-        
+
     default:
         return; /* Unknown part */
     }
-    
+
     /* Ensure value stays within bounds */
     if (value < min)
         value = min;
     if (value > max)
         value = max;
-    
+
     /* Only proceed if the value actually changed */
     if (value != oldValue) {
         /* Update control value */
         SetControlValue(control, value);
-        
+
         /* For safer scrolling, we'll always set the absolute position
            rather than using relative scrolling */
-        TEScroll(0, 0, sDisplayTE);          /* First reset to top */
-        TEScroll(0, -value, sDisplayTE);     /* Then scroll to position */
-        
+        TEScroll(0, 0, sDisplayTE);      /* First reset to top */
+        TEScroll(0, -value, sDisplayTE); /* Then scroll to position */
+
         /* Force redraw of the text area */
         InvalRect(&sDisplayRect);
     }
@@ -287,45 +286,46 @@ static void _UpdateChatScrollbar(void)
 
     /* Calculate total scrollable amount based on text height */
     short viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
-    
+
     /* Get the height of all text */
     short textHeight = TEGetHeight(0, (*sDisplayTE)->teLength, sDisplayTE);
-    
+
     /* Add extra padding to ensure first line is fully visible */
     textHeight += 8;
-    
+
     if (textHeight <= viewHeight) {
         /* Content fits in view, disable scrollbar */
         HiliteControl(sScrollBar, 255); /* 255 = disabled */
         SetControlMaximum(sScrollBar, 0);
         SetControlValue(sScrollBar, 0);
-        
+
         /* Reset text view to top */
         TEScroll(0, 0, sDisplayTE);
     }
     else {
         short scrollPos;
         short maxScroll = textHeight - viewHeight;
-        
+
         /* Content is larger than view, enable scrollbar */
         HiliteControl(sScrollBar, 0); /* 0 = enabled */
-        
+
         /* Make sure maximum is a positive value */
-        if (maxScroll < 0) maxScroll = 0;
+        if (maxScroll < 0)
+            maxScroll = 0;
 
         /* Set maximum value */
         SetControlMaximum(sScrollBar, maxScroll);
 
         /* Keep scroll position at the bottom to show newest messages */
         scrollPos = maxScroll;
-        
+
         /* Update thumb position */
         SetControlValue(sScrollBar, scrollPos);
-        
+
         /* Reset position and scroll to show latest messages */
         TEScroll(0, 0, sDisplayTE);          /* Reset to top */
         TEScroll(0, -scrollPos, sDisplayTE); /* Scroll to bottom */
-        
+
         /* Invalidate to ensure proper redraw */
         InvalRect(&sDisplayRect);
     }
@@ -372,6 +372,146 @@ static void DrawChatInput(void)
     TextFace(normal);
 }
 
+/* Handle mouse clicks in the content area of the chat window */
+Boolean ChatWindow_HandleContentClick(Point localPt)
+{
+    if (!sInitialized || sWindow == NULL) {
+        return false;
+    }
+
+    /* Handle clicks in the scrollbar - check this first as it has highest priority */
+    if (sScrollBar != NULL) {
+        ControlHandle clickedControl;
+        short part;
+
+        part = FindControl(localPt, sWindow, &clickedControl);
+
+        /* Check if the click was in our scrollbar */
+        if (part && clickedControl == sScrollBar) {
+            /* Handle scrolling with appropriate action */
+            if (part == inThumb) {
+                /* For thumb dragging, we use a specific approach */
+                short oldValue = GetControlValue(sScrollBar);
+
+                /* Track without action proc for thumb */
+                part = TrackControl(clickedControl, localPt, NULL);
+
+                if (part) {
+                    /* After tracking completes, get new position and scroll */
+                    short newValue = GetControlValue(sScrollBar);
+
+                    if (newValue != oldValue) {
+                        /* Scroll to the new position */
+                        TEScroll(0, 0, sDisplayTE);         /* Reset to top */
+                        TEScroll(0, -newValue, sDisplayTE); /* Then to position */
+
+                        /* Force redraw */
+                        InvalRect(&sDisplayRect);
+                    }
+                }
+            }
+            else {
+                /* For other parts, use our action proc */
+                part = TrackControl(clickedControl, localPt, (ControlActionUPP)ScrollAction);
+            }
+            return true;
+        }
+    }
+
+    /* Handle clicks in the chat display area */
+    if (sDisplayTE != NULL && PtInRect(localPt, &sDisplayRect)) {
+        /* Handle clicks in the text display - text selection */
+        TEClick(localPt, false, sDisplayTE);
+
+        /* Force redraw to show changes */
+        InvalRect(&sDisplayRect);
+        return true;
+    }
+
+    /* Check if the click is in the input field */
+    if (sInputTE != NULL && PtInRect(localPt, &sInputRect)) {
+        TEClick(localPt, false, sInputTE);
+        return true;
+    }
+
+    return false; /* Click not handled */
+}
+
+/* Handle key events in the chat window */
+Boolean ChatWindow_HandleKeyDown(char key, Boolean isShiftDown, Boolean isCmdDown)
+{
+    if (!sInitialized || sWindow == NULL || sInputTE == NULL) {
+        return false;
+    }
+
+    /* Handle Return key */
+    if (key == '\r' || key == '\n') {
+        if (isShiftDown) {
+            /* Shift-Return: Insert line break in input field */
+            char newline = '\r';
+            TEKey(newline, sInputTE);
+            return true;
+        }
+        else {
+            /* Regular Return: Submit prompt and generate response */
+            ChatWindow_SendMessage();
+            return true;
+        }
+    }
+    else {
+        /* Pass other key presses to the input field */
+        TEKey(key, sInputTE);
+        return true;
+    }
+}
+
+/* Handle window activation/deactivation events */
+void ChatWindow_HandleActivate(Boolean becomingActive)
+{
+    if (!sInitialized || sWindow == NULL) {
+        return;
+    }
+
+    if (becomingActive) {
+        /* Window being activated */
+        if (sInputTE != NULL) {
+            TEActivate(sInputTE);
+        }
+        if (sDisplayTE != NULL) {
+            TEActivate(sDisplayTE);
+        }
+    }
+    else {
+        /* Window being deactivated */
+        if (sInputTE != NULL) {
+            TEDeactivate(sInputTE);
+        }
+        if (sDisplayTE != NULL) {
+            TEDeactivate(sDisplayTE);
+        }
+    }
+}
+
+/* Handle all events for the chat window */
+void ChatWindow_HandleEvent(EventRecord *event)
+{
+    if (event->what == keyDown) {
+        char key            = event->message & charCodeMask;
+        Boolean isShiftDown = (event->modifiers & shiftKey) != 0;
+        Boolean isCmdDown   = (event->modifiers & cmdKey) != 0;
+        ChatWindow_HandleKeyDown(key, isShiftDown, isCmdDown);
+    }
+    else if (event->what == mouseDown) {
+        Point mousePt = event->where;
+        GlobalToLocal(&mousePt);
+        ChatWindow_HandleContentClick(mousePt);
+    }
+    else if (event->what == activateEvt) {
+        Boolean becomingActive = (event->modifiers & activeFlag) != 0;
+        ChatWindow_HandleActivate(becomingActive);
+    }
+}
+
 /* Handle update events for the chat window */
 void ChatWindow_Update(void)
 {
@@ -395,24 +535,24 @@ void ChatWindow_Update(void)
     if (sDisplayTE != NULL) {
         GrafPtr savePort;
         Rect clipSave;
-        
+
         /* Draw a frame around the display area */
         PenNormal();
         PenSize(1, 1);
         FrameRect(&sDisplayRect);
-        
+
         /* Save current drawing environment */
         GetPort(&savePort);
         clipSave = savePort->clipRgn[0]->rgnBBox;
-        
+
         /* Create a slightly inset clip region to prevent text from touching the border */
         Rect textClip = sDisplayRect;
         InsetRect(&textClip, 3, 3);
         ClipRect(&textClip);
-        
+
         /* Update the text content */
         TEUpdate(&(*sDisplayTE)->viewRect, sDisplayTE);
-        
+
         /* Restore original clipping */
         ClipRect(&clipSave);
     }
@@ -541,8 +681,8 @@ static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
     }
 }
 
-/* Process Return key in the chat input field */
-void ChatWindow_ProcessReturnKey(void)
+/* Send a message from the chat input field */
+void ChatWindow_SendMessage(void)
 {
     char promptBuffer[kMaxPromptLength];
     char *response;
@@ -580,14 +720,14 @@ void ChatWindow_ProcessReturnKey(void)
 
     /* Add user prompt to conversation history */
     AddUserPrompt(promptBuffer);
-    
+
     /* Add the user message to display */
     FormatAndAddMessage(promptBuffer, true); /* true = user message */
 
     /* Add temporary "Thinking..." indicator */
     char thinkingMsg[80];
     sprintf(thinkingMsg, "Processing your query...");
-    
+
     /* Add thinking message to display (but NOT to conversation history) */
     FormatAndAddMessage(thinkingMsg, false); /* false = AI message */
 
@@ -599,7 +739,7 @@ void ChatWindow_ProcessReturnKey(void)
 
     /* Add AI response to conversation history */
     AddAIResponse(response);
-    
+
     /* Fully refresh the conversation display - this ensures all messages are shown
        and completely removes the temporary thinking message */
     RefreshConversationDisplay();
@@ -607,125 +747,6 @@ void ChatWindow_ProcessReturnKey(void)
     /* Update the display if window is still valid */
     if (sWindow != NULL) {
         InvalRect(&sWindow->portRect);
-    }
-}
-
-/* Handle mouse clicks in the content area of the chat window */
-Boolean ChatWindow_HandleContentClick(Point localPt)
-{
-    if (!sInitialized || sWindow == NULL) {
-        return false;
-    }
-
-    /* Handle clicks in the scrollbar - check this first as it has highest priority */
-    if (sScrollBar != NULL) {
-        ControlHandle clickedControl;
-        short part;
-
-        part = FindControl(localPt, sWindow, &clickedControl);
-
-        /* Check if the click was in our scrollbar */
-        if (part && clickedControl == sScrollBar) {
-            /* Handle scrolling with appropriate action */
-            if (part == inThumb) {
-                /* For thumb dragging, we use a specific approach */
-                short oldValue = GetControlValue(sScrollBar);
-                
-                /* Track without action proc for thumb */
-                part = TrackControl(clickedControl, localPt, NULL);
-                
-                if (part) {
-                    /* After tracking completes, get new position and scroll */
-                    short newValue = GetControlValue(sScrollBar);
-                    
-                    if (newValue != oldValue) {
-                        /* Scroll to the new position */
-                        TEScroll(0, 0, sDisplayTE);          /* Reset to top */
-                        TEScroll(0, -newValue, sDisplayTE);  /* Then to position */
-                        
-                        /* Force redraw */
-                        InvalRect(&sDisplayRect);
-                    }
-                }
-            } else {
-                /* For other parts, use our action proc */
-                part = TrackControl(clickedControl, localPt, (ControlActionUPP)ScrollAction);
-            }
-            return true;
-        }
-    }
-
-    /* Handle clicks in the chat display area */
-    if (sDisplayTE != NULL && PtInRect(localPt, &sDisplayRect)) {
-        /* Handle clicks in the text display - text selection */
-        TEClick(localPt, false, sDisplayTE);
-
-        /* Force redraw to show changes */
-        InvalRect(&sDisplayRect);
-        return true;
-    }
-
-    /* Check if the click is in the input field */
-    if (sInputTE != NULL && PtInRect(localPt, &sInputRect)) {
-        TEClick(localPt, false, sInputTE);
-        return true;
-    }
-
-    return false; /* Click not handled */
-}
-
-/* Handle key events in the chat window */
-Boolean ChatWindow_HandleKeyDown(char key, Boolean isShiftDown, Boolean isCmdDown)
-{
-    if (!sInitialized || sWindow == NULL || sInputTE == NULL) {
-        return false;
-    }
-
-    /* Handle Return key */
-    if (key == '\r' || key == '\n') {
-        if (isShiftDown) {
-            /* Shift-Return: Insert line break in input field */
-            char newline = '\r';
-            TEKey(newline, sInputTE);
-            return true;
-        }
-        else {
-            /* Regular Return: Submit prompt and generate response */
-            ChatWindow_ProcessReturnKey();
-            return true;
-        }
-    }
-    else {
-        /* Pass other key presses to the input field */
-        TEKey(key, sInputTE);
-        return true;
-    }
-}
-
-/* Handle window activation/deactivation events */
-void ChatWindow_HandleActivate(Boolean becomingActive)
-{
-    if (!sInitialized || sWindow == NULL) {
-        return;
-    }
-
-    if (becomingActive) {
-        /* Window being activated */
-        if (sInputTE != NULL) {
-            TEActivate(sInputTE);
-        }
-        if (sDisplayTE != NULL) {
-            TEActivate(sDisplayTE);
-        }
-    }
-    else {
-        /* Window being deactivated */
-        if (sInputTE != NULL) {
-            TEDeactivate(sInputTE);
-        }
-        if (sDisplayTE != NULL) {
-            TEDeactivate(sDisplayTE);
-        }
     }
 }
 
@@ -751,15 +772,15 @@ TEHandle ChatWindow_GetInputTE(void)
 static void RefreshConversationDisplay(void)
 {
     short i;
-    
+
     /* Safety check */
     if (!sInitialized || sDisplayTE == NULL) {
         return;
     }
-    
+
     /* Clear the text display first */
     TESetText("", 0, sDisplayTE);
-    
+
     /* Display all messages from the conversation history */
     for (i = 0; i < gConversationHistory.count; i++) {
         ConversationMessage *msg = &gConversationHistory.messages[i];
@@ -767,7 +788,7 @@ static void RefreshConversationDisplay(void)
             FormatAndAddMessage(msg->text, msg->type == kUserMessage);
         }
     }
-    
+
     /* Make sure we're scrolled to show the most recent messages */
     _UpdateChatScrollbar();
 }
@@ -782,7 +803,7 @@ void ChatWindow_Show(Boolean visible)
     if (visible) {
         /* Refresh conversation display when showing window */
         RefreshConversationDisplay();
-        
+
         ShowWindow(sWindow);
         SelectWindow(sWindow);
         InvalRect(&sWindow->portRect);

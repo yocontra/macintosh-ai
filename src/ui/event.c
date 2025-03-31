@@ -5,9 +5,8 @@
 
 #include "../constants.h"
 #include "../error.h"
-#include "chat_window.h"
 #include "event.h"
-#include "splash_window.h"
+#include "window_manager.h"
 
 /*********************************************************************
  * APPLICATION CONTROL FUNCTIONS
@@ -19,9 +18,8 @@ void QuitApplication(Boolean saveChanges)
     /* We don't have document changes to save, so parameter not used */
     (void)saveChanges;
 
-    /* Clean up windows */
-    ChatWindow_Dispose();
-    SplashWindow_Dispose();
+    /* Clean up windows through the window manager */
+    WindowManager_Dispose();
 
     /* Exit application */
     ExitToShell();
