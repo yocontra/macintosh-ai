@@ -1,7 +1,10 @@
 ## AI for Macintosh
 
-Provides an interface to use AI on a classic Macintosh (tested on System 7.0.1).
+Provides an interface to use AI on a classic Macintosh (built for System 7.0.1 - should work on others).
 
+![Screenshot 2025-03-30 at 7 56 10 PM](https://github.com/user-attachments/assets/7071c62a-cf1f-4234-aa87-e09ee83c194d)
+![Screenshot 2025-03-30 at 7 56 35 PM](https://github.com/user-attachments/assets/14663d3e-7c8e-4213-b2d2-0cf73ef832ac)
+ 
 ### Requirements
 
 - [Retro68](https://github.com/autc04/Retro68) toolchain for cross-compiling to classic Mac OS
