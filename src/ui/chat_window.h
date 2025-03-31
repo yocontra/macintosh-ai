@@ -43,4 +43,7 @@ void ChatWindow_AddMessage(const char *message, Boolean isUserMessage);
 /* Perform idle processing (text cursor blinking, etc.) */
 void ChatWindow_Idle(void);
 
+/* Toggle between AI models */
+void ChatWindow_ToggleAIModel(void);
+
 #endif /* CHAT_WINDOW_H */

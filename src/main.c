@@ -8,7 +8,6 @@
 #include <TextEdit.h>
 #include <Windows.h>
 
-#include "ai_model.h"
 #include "constants.h"
 #include "error.h"
 #include "sound/beepbop.c"
@@ -79,9 +78,6 @@ int main(void)
 
     AppendResMenu(appleMenu, 'DRVR');
     DrawMenuBar();
-
-    /* Initialize conversation history */
-    InitConversationHistory();
 
     /* Initialize window manager and default windows */
     WindowManager_Initialize();

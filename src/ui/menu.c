@@ -6,6 +6,7 @@
 
 #include "../constants.h"
 #include "../error.h"
+#include "chat_window.h"
 #include "menu.h"
 #include "window_manager.h"
 
@@ -108,6 +109,15 @@ void DoMenuCommand(long menuCommand)
             }
             break;
 
+        case kItemToggleAI:
+            /* Toggle between AI models only when in chat mode */
+            if (gAppMode == kModeChatWindow && WindowManager_IsWindowVisible(kWindowTypeChat)) {
+                /* Call the chat window function to toggle AI models */
+                extern void ChatWindow_ToggleAIModel(void);
+                ChatWindow_ToggleAIModel();
+            }
+            break;
+
         case kItemClose:
             w = FrontWindow();
             if (w) {
@@ -148,29 +158,32 @@ void DoMenuCommand(long menuCommand)
                 case 1: /* Undo - not supported in TextEdit */
                     break;
                 case 3: /* Cut */
-                    TECut(gChatInputTE);
+                    TECut(ChatWindow_GetInputTE());
                     break;
                 case 4: /* Copy */
                     /*
-                     * For TextEdit operations, we still need to access the TE handles directly
-                     * This is a limitation of the current architecture, as TextEdit handles
-                     * are not abstracted through the window manager.
+                     * For TextEdit operations, we need to get the handles from chat window
+                     * functions to maintain proper encapsulation
                      */
-                    if (gChatDisplayTE != NULL &&
-                        (*gChatDisplayTE)->selStart < (*gChatDisplayTE)->selEnd) {
-                        /* Display TE has selection, use it for copy */
-                        TECopy(gChatDisplayTE);
-                    }
-                    else if (gChatInputTE != NULL) {
-                        /* Default to input field */
-                        TECopy(gChatInputTE);
+                    {
+                        TEHandle displayTE = ChatWindow_GetDisplayTE();
+                        TEHandle inputTE   = ChatWindow_GetInputTE();
+
+                        if (displayTE != NULL && (*displayTE)->selStart < (*displayTE)->selEnd) {
+                            /* Display TE has selection, use it for copy */
+                            TECopy(displayTE);
+                        }
+                        else if (inputTE != NULL) {
+                            /* Default to input field */
+                            TECopy(inputTE);
+                        }
                     }
                     break;
                 case 5: /* Paste */
-                    TEPaste(gChatInputTE);
+                    TEPaste(ChatWindow_GetInputTE());
                     break;
                 case 6: /* Clear */
-                    TEDelete(gChatInputTE);
+                    TEDelete(ChatWindow_GetInputTE());
                     break;
                 }
             }

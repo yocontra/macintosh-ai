@@ -1,7 +1,7 @@
-#ifndef AI_MODEL_H
-#define AI_MODEL_H
+#ifndef MARKOV_H
+#define MARKOV_H
 
-#include "constants.h"
+#include "../constants.h"
 
 /* Maximum number of conversation turns we'll track */
 #define kMaxConversationHistory 50
@@ -21,19 +21,16 @@ typedef struct {
     short count; /* Number of messages in the history */
 } ConversationHistory;
 
-/* Global conversation history */
-extern ConversationHistory gConversationHistory;
+/* Train the Markov chain with new text */
+void TrainMarkov(const char *text);
 
-/* Initialize the conversation history */
-void InitConversationHistory(void);
+/* Load the training data for the Markov model */
+void LoadTrainingData(void);
 
-/* Interface for AI model interaction */
-char *GenerateAIResponse(const ConversationHistory *history);
+/* Initialize the Markov model */
+void InitMarkovModel(void);
 
-/* Add a user prompt to the conversation */
-void AddUserPrompt(const char *prompt);
+/* Interface for Markov model interaction */
+char *GenerateMarkovResponse(const ConversationHistory *history);
 
-/* Add an AI response to the conversation */
-void AddAIResponse(const char *response);
-
-#endif /* AI_MODEL_H */
+#endif /* MARKOV_H */

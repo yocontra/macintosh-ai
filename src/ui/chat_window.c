@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../ai_model.h"
+#include "../chatbot/model_manager.h"
 #include "../constants.h"
 #include "../error.h"
 #include "chat_window.h"
@@ -24,6 +24,9 @@ static TEHandle sInputTE        = NULL;      /* Text edit handle for input */
 static TEHandle sDisplayTE      = NULL;      /* Text edit handle for chat display */
 static ControlHandle sScrollBar = NULL;      /* Scrollbar for chat display */
 static char sPromptBuffer[kMaxPromptLength]; /* Buffer for user prompt */
+
+/* AI model type - change this to switch between models */
+static AIModelType sActiveModel = kMarkovModel; /* Default to Markov */
 
 /* Private function declarations */
 static void _UpdateChatScrollbar(void);
@@ -46,8 +49,20 @@ void ChatWindow_Initialize(void)
         return;
     }
 
-    /* Initialize conversation history if needed */
-    InitConversationHistory();
+    /* Initialize the AI models here (using our selected model) */
+    /* Set the active AI model */
+    SetActiveAIModel(sActiveModel);
+
+    /* Initialize the AI models */
+    InitModels();
+
+    /* Add welcome message that will appear when the window is shown */
+    char welcomeMsg[200];
+    sprintf(welcomeMsg, "AI initialized! Using %s model. How can I help you today?",
+            (sActiveModel == kMarkovModel) ? "Markov chain (local)" : "OpenAI (remote)");
+
+    /* Add message to conversation history */
+    AddAIResponse(welcomeMsg);
 
     /* Check available memory first */
     err = CheckMemory();
@@ -204,6 +219,29 @@ void ChatWindow_Dispose(void)
 
     sInitialized = false;
     sIsVisible   = false;
+}
+
+/* Function to toggle between AI models */
+void ChatWindow_ToggleAIModel(void)
+{
+    /* Toggle the model */
+    if (sActiveModel == kMarkovModel) {
+        sActiveModel = kOpenAIModel;
+    }
+    else {
+        sActiveModel = kMarkovModel;
+    }
+
+    /* Update the model selection in the AI interface */
+    SetActiveAIModel(sActiveModel);
+
+    /* Inform the user about the model change */
+    char modelMsg[100];
+    sprintf(modelMsg, "Switched to %s model.",
+            (sActiveModel == kMarkovModel) ? "Markov chain (local)" : "OpenAI (remote)");
+
+    /* Add message to chat window */
+    FormatAndAddMessage(modelMsg, false);
 }
 
 /* Update the chat scrollbar based on current text content */
@@ -731,7 +769,7 @@ void ChatWindow_SendMessage(void)
     /* Ensure the thinking message is visible by forcing a redraw */
     InvalRect(&sDisplayRect);
 
-    /* Generate AI response */
+    /* Generate AI response using the selected model */
     response = GenerateAIResponse(&gConversationHistory);
 
     /* Add AI response to conversation history */
@@ -839,6 +877,7 @@ void ChatWindow_Idle(void)
         return;
     }
 
+    /* Standard idle processing */
     if (sInputTE != NULL) {
         TEIdle(sInputTE);
     }

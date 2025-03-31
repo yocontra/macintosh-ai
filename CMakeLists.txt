@@ -14,7 +14,10 @@ set(SRC_C
     src/ui/event.c
     src/error.c
     src/globals.c
-    src/ai_model.c
+    src/chatbot/markov.c
+    src/chatbot/markov_data.c
+    src/chatbot/openai.c
+    src/chatbot/model_manager.c
     src/ui/splash_window.c
     src/ui/chat_window.c
     src/ui/about_window.c
@@ -29,7 +32,10 @@ set(HEADER_FILES
     src/ui/event.h
     src/error.h
     src/constants.h
-    src/ai_model.h
+    src/chatbot/markov.h
+    src/chatbot/markov_data.h
+    src/chatbot/openai.h
+    src/chatbot/ai_model_interface.h
     src/ui/splash_window.h
     src/ui/chat_window.h
     src/ui/about_window.h

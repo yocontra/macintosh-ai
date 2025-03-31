@@ -22,6 +22,7 @@ resource 'MENU' (129) {
     {
         "Chat", noIcon, "L", noMark, plain;
         "Close", noIcon, "W", noMark, plain;
+        "Toggle AI Model", noIcon, "M", noMark, plain;
         "-", noIcon, noKey, noMark, plain;
         "Quit", noIcon, "Q", noMark, plain;
     }
@@ -130,6 +131,6 @@ resource 'SIZE' (-1) {
     reserved,
     reserved,
     reserved,
-    256 * 1024,   /* Minimal memory size for stability */
-    512 * 1024    /* Preferred memory size */
+    512 * 1024,   /* Minimal memory size for Markov chain and conversation history */
+    768 * 1024    /* Preferred memory size with buffer for generation and UI */
 };

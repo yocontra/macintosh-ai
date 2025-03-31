@@ -19,10 +19,11 @@ enum {
     kMenuEdit,
 
     /* Menu item indices */
-    kItemAbout = 1,
-    kItemChat  = 1,
-    kItemClose = 2,
-    kItemQuit  = 4,
+    kItemAbout    = 1,
+    kItemChat     = 1,
+    kItemClose    = 2,
+    kItemToggleAI = 3,
+    kItemQuit     = 4,
 
     /* Window resource IDs */
     kAboutBoxID   = 128,
@@ -110,22 +111,8 @@ enum {
  * GLOBAL VARIABLES
  *********************************************************************/
 
-/* External declarations for global variables defined in globals.c */
+/* External declarations for global variables defined in main.c */
 extern short gAppMode; /* Current application mode */
-
-extern WindowRef gMainWindow;
-extern ControlHandle gStartChatButton;
-
-extern WindowRef gChatWindow;
-extern Boolean gChatWindowOpen;
-extern Rect gChatContentRect;
-extern Rect gChatInputRect;
-extern Rect gChatDisplayRect;
-extern TEHandle gChatInputTE;
-extern TEHandle gChatDisplayTE;      /* TextEdit handle for chat display */
-extern ControlHandle gChatScrollBar; /* Scrollbar for chat display */
-extern char gPromptBuffer[kMaxPromptLength];
-extern char gConversationBuffer[kMaxResponseLength];
 
 
 #endif /* CONSTANTS_H */
