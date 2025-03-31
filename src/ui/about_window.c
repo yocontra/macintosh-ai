@@ -37,29 +37,71 @@ void AboutWindow_Dispose(void)
     sIsVisible   = false;
 }
 
-/* Handle events for the about box (if visible) */
-void AboutWindow_HandleEvent(EventRecord *event)
+/* Render the about window contents */
+void AboutWindow_Render(void)
 {
-    /* Only process events if the about dialog is open */
-    if (sIsVisible) {
-        if (event->what == mouseDown) {
-            /* Any click anywhere in the about box will dismiss it */
-            AboutWindow_Show(false);
-        }
+    Handle h;
+
+    if (!sIsVisible || sWindow == NULL) {
+        return;
+    }
+
+    SetPort(sWindow);
+
+    /* Erase the window area with default background */
+    EraseRect(&sWindow->portRect);
+
+    /* Load and display the text resource */
+    h = GetResource('TEXT', kAboutBoxID);
+    if (h != NULL) {
+        HLock(h);
+        Rect r = sWindow->portRect;
+        InsetRect(&r, 10, 10);
+        TETextBox(*h, GetHandleSize(h), &r, teJustLeft);
+        ReleaseResource(h);
     }
 }
 
 /* Handle update events for the about window */
-void AboutWindow_Update(void)
+static void AboutWindow_Update(void)
 {
     if (!sIsVisible || sWindow == NULL) {
         return;
     }
 
-    /* About window is mostly static, just validate the update region */
     SetPort(sWindow);
     BeginUpdate(sWindow);
+
+    /* Call the render function to draw window contents */
+    AboutWindow_Render();
+
     EndUpdate(sWindow);
+}
+
+/* Handle events for the about box (if visible) */
+void AboutWindow_HandleEvent(EventRecord *event)
+{
+    /* Only process events if the about dialog is open */
+    if (!sIsVisible || sWindow == NULL) {
+        return;
+    }
+
+    switch (event->what) {
+    case mouseDown:
+        /* Any click anywhere in the about box will dismiss it */
+        AboutWindow_Show(false);
+        break;
+
+    case updateEvt:
+        if ((WindowPtr)event->message == sWindow) {
+            AboutWindow_Update();
+        }
+        break;
+
+    default:
+        /* No other event types need to be handled for the about window */
+        break;
+    }
 }
 
 /* Get the window reference for the about window */
@@ -92,11 +134,11 @@ void AboutWindow_Show(Boolean visible)
         /* Center the window on screen */
         MoveWindow(sWindow, qd.screenBits.bounds.right / 2 - sWindow->portRect.right / 2,
                    qd.screenBits.bounds.bottom / 2 - sWindow->portRect.bottom / 2, false);
-        ShowWindow(sWindow);
-        SelectWindow(sWindow);
+
+        /* Set port and render before showing */
         SetPort(sWindow);
 
-        /* Load and display the text resource */
+        /* We need to make sure the text resource exists before showing window */
         h = GetResource('TEXT', kAboutBoxID);
         if (h == NULL) {
             HandleError(kErrResourceNotFound, kCtxAboutBoxText, false); /* Non-fatal */
@@ -104,12 +146,14 @@ void AboutWindow_Show(Boolean visible)
             sWindow = NULL;
             return;
         }
-
-        HLock(h);
-        Rect r = sWindow->portRect;
-        InsetRect(&r, 10, 10);
-        TETextBox(*h, GetHandleSize(h), &r, teJustLeft);
         ReleaseResource(h);
+
+        /* Now show window and make it active */
+        ShowWindow(sWindow);
+        SelectWindow(sWindow);
+
+        /* Render window contents */
+        AboutWindow_Render();
 
         /* Mark window as visible */
         sIsVisible = true;

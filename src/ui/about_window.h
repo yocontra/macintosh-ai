@@ -16,8 +16,8 @@ void AboutWindow_Dispose(void);
 /* Handle all events for the about window */
 void AboutWindow_HandleEvent(EventRecord *event);
 
-/* Handle update events for the about window */
-void AboutWindow_Update(void);
+/* Render the about window contents */
+void AboutWindow_Render(void);
 
 /* Get the window reference for the about window */
 WindowRef AboutWindow_GetWindowRef(void);

@@ -273,23 +273,8 @@ void WindowManager_HandleEvent(EventRecord *event)
         }
     }
 
-    /* Handle update events */
-    if (event->what == updateEvt) {
-        window = (WindowRef)event->message;
-
-        if (window == SplashWindow_GetWindowRef()) {
-            SplashWindow_Update();
-            return;
-        }
-        else if (window == ChatWindow_GetWindowRef()) {
-            ChatWindow_Update();
-            return;
-        }
-        else if (window == AboutWindow_GetWindowRef()) {
-            AboutWindow_Update();
-            return;
-        }
-    }
+    /* For update events, we no longer need to call Update directly.
+     * Each window's HandleEvent function will handle update events for its own window. */
 
     /* Global key command: Cmd-L to open chat window */
     if (event->what == keyDown) {
@@ -301,7 +286,27 @@ void WindowManager_HandleEvent(EventRecord *event)
         }
     }
 
-    /* Route event to the active window */
+    /* Route events to the appropriate window(s) */
+
+    /* For update events, route to the specific window referenced in the event */
+    if (event->what == updateEvt) {
+        WindowRef window = (WindowRef)event->message;
+
+        if (window == SplashWindow_GetWindowRef() && SplashWindow_IsVisible()) {
+            SplashWindow_HandleEvent(event);
+            return;
+        }
+        else if (window == ChatWindow_GetWindowRef() && ChatWindow_IsVisible()) {
+            ChatWindow_HandleEvent(event);
+            return;
+        }
+        else if (window == AboutWindow_GetWindowRef() && AboutWindow_IsVisible()) {
+            AboutWindow_HandleEvent(event);
+            return;
+        }
+    }
+
+    /* For other events, route based on the foreground window */
     switch (gForegroundWindowType) {
     case kWindowTypeSplash:
         SplashWindow_HandleEvent(event);

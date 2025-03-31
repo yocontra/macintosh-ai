@@ -16,8 +16,8 @@ void SplashWindow_Dispose(void);
 /* Handle all events for the splash window */
 void SplashWindow_HandleEvent(EventRecord *event);
 
-/* Handle update events for the splash window */
-void SplashWindow_Update(void);
+/* Render the splash window contents */
+void SplashWindow_Render(void);
 
 /* Get the window reference for the splash window */
 WindowRef SplashWindow_GetWindowRef(void);

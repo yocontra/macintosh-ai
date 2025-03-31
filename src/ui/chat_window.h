@@ -16,8 +16,8 @@ void ChatWindow_Dispose(void);
 /* Handle all events for the chat window */
 void ChatWindow_HandleEvent(EventRecord *event);
 
-/* Handle update events for the chat window */
-void ChatWindow_Update(void);
+/* Render the chat window contents */
+void ChatWindow_Render(void);
 
 /* Get the window reference for the chat window */
 WindowRef ChatWindow_GetWindowRef(void);

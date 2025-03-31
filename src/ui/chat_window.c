@@ -527,35 +527,14 @@ void ChatWindow_HandleActivate(Boolean becomingActive)
     }
 }
 
-/* Handle all events for the chat window */
-void ChatWindow_HandleEvent(EventRecord *event)
-{
-    if (event->what == keyDown) {
-        char key            = event->message & charCodeMask;
-        Boolean isShiftDown = (event->modifiers & shiftKey) != 0;
-        Boolean isCmdDown   = (event->modifiers & cmdKey) != 0;
-        ChatWindow_HandleKeyDown(key, isShiftDown, isCmdDown);
-    }
-    else if (event->what == mouseDown) {
-        Point mousePt = event->where;
-        GlobalToLocal(&mousePt);
-        ChatWindow_HandleContentClick(mousePt);
-    }
-    else if (event->what == activateEvt) {
-        Boolean becomingActive = (event->modifiers & activeFlag) != 0;
-        ChatWindow_HandleActivate(becomingActive);
-    }
-}
-
-/* Handle update events for the chat window */
-void ChatWindow_Update(void)
+/* Render the chat window contents */
+void ChatWindow_Render(void)
 {
     if (!sInitialized || sWindow == NULL) {
         return;
     }
 
     SetPort(sWindow);
-    BeginUpdate(sWindow);
 
     /* Erase the window area with white background */
     BackColor(whiteColor);
@@ -599,8 +578,60 @@ void ChatWindow_Update(void)
     if (sInputTE != NULL) {
         TEUpdate(&sInputRect, sInputTE);
     }
+}
+
+/* Handle update events for the chat window */
+static void ChatWindow_Update(void)
+{
+    if (!sInitialized || sWindow == NULL) {
+        return;
+    }
+
+    SetPort(sWindow);
+    BeginUpdate(sWindow);
+
+    /* Call the render function to draw window contents */
+    ChatWindow_Render();
 
     EndUpdate(sWindow);
+}
+
+/* Handle all events for the chat window */
+void ChatWindow_HandleEvent(EventRecord *event)
+{
+    if (!sIsVisible || sWindow == NULL) {
+        return;
+    }
+
+    switch (event->what) {
+    case keyDown: {
+        char key            = event->message & charCodeMask;
+        Boolean isShiftDown = (event->modifiers & shiftKey) != 0;
+        Boolean isCmdDown   = (event->modifiers & cmdKey) != 0;
+        ChatWindow_HandleKeyDown(key, isShiftDown, isCmdDown);
+    } break;
+
+    case mouseDown: {
+        Point mousePt = event->where;
+        GlobalToLocal(&mousePt);
+        ChatWindow_HandleContentClick(mousePt);
+    } break;
+
+    case activateEvt: {
+        Boolean becomingActive = (event->modifiers & activeFlag) != 0;
+        ChatWindow_HandleActivate(becomingActive);
+    } break;
+
+    case updateEvt:
+        if ((WindowPtr)event->message == sWindow) {
+            ChatWindow_Update();
+        }
+        break;
+
+    default:
+        /* No other event types need to be handled */
+        break;
+    }
 }
 
 /* Clear the chat input field */
@@ -839,9 +870,13 @@ void ChatWindow_Show(Boolean visible)
         /* Refresh conversation display when showing window */
         RefreshConversationDisplay();
 
+        /* Show and select the window */
         ShowWindow(sWindow);
         SelectWindow(sWindow);
-        InvalRect(&sWindow->portRect);
+
+        /* Render the window contents */
+        ChatWindow_Render();
+
         sIsVisible = true;
     }
     else {

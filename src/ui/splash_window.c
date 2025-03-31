@@ -235,15 +235,14 @@ void SplashWindow_Dispose(void)
     sInitialized = false;
 }
 
-/* Handle update events for the splash window */
-void SplashWindow_Update(void)
+/* Render the splash window contents */
+void SplashWindow_Render(void)
 {
     if (!sInitialized || sWindow == NULL) {
         return;
     }
 
     SetPort(sWindow);
-    BeginUpdate(sWindow);
 
     /* Draw the UI elements using the shared function */
     DrawSplashWindowUI(sWindow);
@@ -252,6 +251,20 @@ void SplashWindow_Update(void)
     if (sStartChatButton != NULL) {
         DrawControls(sWindow);
     }
+}
+
+/* Handle update events for the splash window */
+static void SplashWindow_Update(void)
+{
+    if (!sInitialized || sWindow == NULL) {
+        return;
+    }
+
+    SetPort(sWindow);
+    BeginUpdate(sWindow);
+
+    /* Call the render function to draw window contents */
+    SplashWindow_Render();
 
     EndUpdate(sWindow);
 }
@@ -285,7 +298,12 @@ Boolean SplashWindow_HandleContentClick(Point localPt)
 /* Handle all events for the splash window */
 void SplashWindow_HandleEvent(EventRecord *event)
 {
-    if (event->what == mouseDown) {
+    if (!sIsVisible || sWindow == NULL) {
+        return;
+    }
+
+    switch (event->what) {
+    case mouseDown: {
         Point mousePt = event->where;
         GlobalToLocal(&mousePt);
         if (SplashWindow_HandleContentClick(mousePt)) {
@@ -293,8 +311,18 @@ void SplashWindow_HandleEvent(EventRecord *event)
             WindowManager_OpenWindow(kWindowTypeChat);
             WindowManager_CloseWindow(kWindowTypeSplash);
         }
+    } break;
+
+    case updateEvt:
+        if ((WindowPtr)event->message == sWindow) {
+            SplashWindow_Update();
+        }
+        break;
+
+    default:
+        /* Splash window doesn't handle other event types */
+        break;
     }
-    /* Splash window doesn't handle other event types */
 }
 
 /* Get the window reference for the splash window */
@@ -311,21 +339,15 @@ void SplashWindow_Show(Boolean visible)
     }
 
     if (visible) {
-        /* Draw all the UI elements to ensure they're shown correctly */
+        /* Set port before showing window */
         SetPort(sWindow);
-        DrawSplashWindowUI(sWindow);
-
-        /* Make sure the button is visible */
-        if (sStartChatButton != NULL) {
-            DrawControls(sWindow);
-        }
 
         /* Show and select the window */
         ShowWindow(sWindow);
         SelectWindow(sWindow);
 
-        /* Force complete redraw */
-        InvalRect(&sWindow->portRect);
+        /* Call render to draw all content */
+        SplashWindow_Render();
 
         /* Update visibility tracking */
         sIsVisible = true;

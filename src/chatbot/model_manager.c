@@ -13,9 +13,17 @@ ConversationHistory gConversationHistory;
 /* Default to Markov model */
 AIModelType gActiveAIModel = kMarkovModel;
 
+/* Track initialization status */
+Boolean gModelsInitialized = false;
+
 /* Initialize all AI models and conversation history */
 void InitModels(void)
 {
+    /* Prevent double initialization */
+    if (gModelsInitialized) {
+        return;
+    }
+
     /* Clear the conversation history */
     gConversationHistory.count = 0;
     memset(gConversationHistory.messages, 0, sizeof(ConversationMessage) * kMaxConversationHistory);
@@ -27,6 +35,8 @@ void InitModels(void)
     else if (gActiveAIModel == kOpenAIModel) {
         InitOpenAI();
     }
+
+    gModelsInitialized = true;
 }
 
 /* Set the active AI model */
