@@ -28,7 +28,4 @@ void AboutWindow_Show(Boolean visible);
 /* Determine if the window is visible */
 Boolean AboutWindow_IsVisible(void);
 
-/* Legacy function for backwards compatibility */
-void ShowAboutBox(void);
-
 #endif /* ABOUT_WINDOW_H */

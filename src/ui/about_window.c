@@ -173,10 +173,3 @@ Boolean AboutWindow_IsVisible(void)
 {
     return sIsVisible;
 }
-
-/* Legacy function for backwards compatibility */
-void ShowAboutBox(void)
-{
-    AboutWindow_Initialize();
-    AboutWindow_Show(true);
-}

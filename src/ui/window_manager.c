@@ -140,7 +140,7 @@ void WindowManager_SetForegroundWindow(WindowType windowType)
     /* Update the foreground window type */
     gForegroundWindowType = windowType;
 
-    /* Update application mode for compatibility with existing code */
+    /* Update application mode */
     switch (windowType) {
     case kWindowTypeSplash:
         gAppMode = kModeMainSplash;
