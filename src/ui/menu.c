@@ -4,6 +4,7 @@
 #include <TextEdit.h>
 #include <Windows.h>
 
+#include "../chatbot/model_manager.h"
 #include "../constants.h"
 #include "../error.h"
 #include "chat_window.h"
@@ -17,61 +18,42 @@
 /* Update the menu state based on current application mode */
 void UpdateMenus(void)
 {
-    MenuRef m   = GetMenu(kMenuFile);
-    WindowRef w = FrontWindow();
+    MenuRef fileMenu   = GetMenu(kMenuFile);
+    MenuRef modelsMenu = GetMenu(kMenuModels);
+    WindowRef w        = FrontWindow();
 
     /* First determine which window is in front to properly set menu items */
     switch (gAppMode) {
     case kModeMainSplash:
         /* In splash mode, Close is disabled unless a window is open */
         if (w && w == WindowManager_GetWindowRef(kWindowTypeSplash))
-            EnableItem(m, kItemClose); /* Can close main window */
+            EnableItem(fileMenu, kItemClose); /* Can close main window */
         else
-            DisableItem(m, kItemClose);
+            DisableItem(fileMenu, kItemClose);
 
         /* Always enable Chat menu item in splash mode */
-        EnableItem(m, kItemChat);
+        EnableItem(fileMenu, kItemChat);
+
+        /* Disable Models menu in splash mode */
+        DisableItem(modelsMenu, 0); /* Disable entire menu */
         break;
 
     case kModeChatWindow:
         /* In chat mode, Close will close the chat window */
         if (w && w == WindowManager_GetWindowRef(kWindowTypeChat))
-            EnableItem(m, kItemClose); /* Can close chat window */
+            EnableItem(fileMenu, kItemClose); /* Can close chat window */
         else
-            DisableItem(m, kItemClose);
+            DisableItem(fileMenu, kItemClose);
 
-        /* Chat is already open, so no need to enable/disable it */
+        /* Enable Models menu in chat mode */
+        EnableItem(modelsMenu, 0); /* Enable entire menu */
+
+        /* Set checkmarks for active model */
+        CheckItem(modelsMenu, kItemMarkovModel, gActiveAIModel == kMarkovModel);
+        CheckItem(modelsMenu, kItemOpenAIModel, gActiveAIModel == kOpenAIModel);
+        CheckItem(modelsMenu, kItemTemplateModel, gActiveAIModel == kTemplateModel);
+
         break;
-    }
-
-    /* Handle Edit menu based on what's in front */
-    m = GetMenu(kMenuEdit);
-    if (w && GetWindowKind(w) < 0) {
-        /* Desk accessory in front: Enable edit menu items */
-        EnableItem(m, 1);
-        EnableItem(m, 3);
-        EnableItem(m, 4);
-        EnableItem(m, 5);
-        EnableItem(m, 6);
-    }
-    else if (gAppMode == kModeChatWindow && WindowManager_IsWindowVisible(kWindowTypeChat) &&
-             w == WindowManager_GetWindowRef(kWindowTypeChat)) {
-        /* Chat window is in front: Enable copy and possibly other edit operations */
-        EnableItem(m, 4); /* Copy */
-
-        /* Also enable the input field related operations */
-        EnableItem(m, 1); /* Undo */
-        EnableItem(m, 3); /* Cut */
-        EnableItem(m, 5); /* Paste */
-        EnableItem(m, 6); /* Clear */
-    }
-    else {
-        /* Other window or nothing in front, disable edit menu */
-        DisableItem(m, 1);
-        DisableItem(m, 3);
-        DisableItem(m, 4);
-        DisableItem(m, 5);
-        DisableItem(m, 6);
     }
 }
 
@@ -109,15 +91,6 @@ void DoMenuCommand(long menuCommand)
             }
             break;
 
-        case kItemToggleAI:
-            /* Toggle between AI models only when in chat mode */
-            if (gAppMode == kModeChatWindow && WindowManager_IsWindowVisible(kWindowTypeChat)) {
-                /* Call the chat window function to toggle AI models */
-                extern void ChatWindow_ToggleAIModel(void);
-                ChatWindow_ToggleAIModel();
-            }
-            break;
-
         case kItemClose:
             w = FrontWindow();
             if (w) {
@@ -147,45 +120,36 @@ void DoMenuCommand(long menuCommand)
             break;
         }
     }
-    else if (menuID == kMenuEdit) {
-        if (!SystemEdit(menuItem - 1)) {
-            /* Edit command not handled by desk accessory */
-            w = FrontWindow();
-            if (WindowManager_IsWindowVisible(kWindowTypeChat) &&
-                w == WindowManager_GetWindowRef(kWindowTypeChat)) {
-                /* Handle all edit menu operations in chat window */
+    else if (menuID == kMenuModels) {
+        /* Only change model when in chat mode */
+        if (gAppMode == kModeChatWindow && WindowManager_IsWindowVisible(kWindowTypeChat)) {
+            /* Get current chat window */
+            WindowRef chatWindow = WindowManager_GetWindowRef(kWindowTypeChat);
+            if (chatWindow != NULL) {
+                /* Handle model selection */
                 switch (menuItem) {
-                case 1: /* Undo - not supported in TextEdit */
+                case kItemMarkovModel:
+                    /* Set to Markov chain model */
+                    SetActiveAIModel(kMarkovModel);
+                    /* Add message about model switch */
+                    ChatWindow_AddMessage("Switched to Markov chain model.", false);
                     break;
-                case 3: /* Cut */
-                    TECut(ChatWindow_GetInputTE());
-                    break;
-                case 4: /* Copy */
-                    /*
-                     * For TextEdit operations, we need to get the handles from chat window
-                     * functions to maintain proper encapsulation
-                     */
-                    {
-                        TEHandle displayTE = ChatWindow_GetDisplayTE();
-                        TEHandle inputTE   = ChatWindow_GetInputTE();
 
-                        if (displayTE != NULL && (*displayTE)->selStart < (*displayTE)->selEnd) {
-                            /* Display TE has selection, use it for copy */
-                            TECopy(displayTE);
-                        }
-                        else if (inputTE != NULL) {
-                            /* Default to input field */
-                            TECopy(inputTE);
-                        }
-                    }
+                case kItemOpenAIModel:
+                    /* Set to OpenAI model */
+                    SetActiveAIModel(kOpenAIModel);
+                    ChatWindow_AddMessage("Switched to OpenAI model.", false);
                     break;
-                case 5: /* Paste */
-                    TEPaste(ChatWindow_GetInputTE());
-                    break;
-                case 6: /* Clear */
-                    TEDelete(ChatWindow_GetInputTE());
+
+                case kItemTemplateModel:
+                    /* Set to Template model */
+                    SetActiveAIModel(kTemplateModel);
+                    ChatWindow_AddMessage("Switched to Template-based model.", false);
                     break;
                 }
+
+                /* Update menu to show check mark next to active model */
+                UpdateMenus();
             }
         }
     }

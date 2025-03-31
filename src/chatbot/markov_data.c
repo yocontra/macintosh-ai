@@ -52,11 +52,30 @@ void LoadDynamicTrainingData(void)
             dateTime.year);
     TrainMarkov(buffer);
 
-    /* Memory information from actual system */
-    long totalMem = MaxMem(NULL);
-    if (totalMem > 0) {
-        sprintf(buffer, "Your Mac has about %.1f MB of RAM installed.",
-                (float)totalMem / (1024 * 1024));
+    /* Memory information using Gestalt for physical RAM */
+    long physicalRAM;
+    if (Gestalt(gestaltPhysicalRAMSize, &physicalRAM) == noErr) {
+        /* Format as MB with 1 decimal place */
+        float ramMB = (float)physicalRAM / (1024 * 1024);
+
+        sprintf(buffer, "Your Mac has about %.1f MB of RAM installed.", ramMB);
+        TrainMarkov(buffer);
+
+        sprintf(buffer, "This Mac has %.1f megabytes of RAM.", ramMB);
+        TrainMarkov(buffer);
+
+        sprintf(buffer, "Your system has %.1f MB of memory.", ramMB);
+        TrainMarkov(buffer);
+    }
+    else {
+        /* Fallback if Gestalt fails */
+        sprintf(buffer, "Your Mac has about 4 MB of RAM installed.");
+        TrainMarkov(buffer);
+
+        sprintf(buffer, "This Mac has 4 megabytes of RAM.");
+        TrainMarkov(buffer);
+
+        sprintf(buffer, "Your system has 4MB of memory.");
         TrainMarkov(buffer);
     }
 

@@ -18,56 +18,48 @@ void LoadTemplateData(void)
     patterns[1] = "hi";
     patterns[2] = "hey";
     patterns[3] = "greetings";
-    AddTemplate("Hello! I'm your Macintosh AI assistant. Think of me as your digital sidekick.",
-                kCategoryGreeting, patterns, 4);
+    AddTemplate("Hello! I'm your Macintosh AI assistant. What do you need?", kCategoryGreeting,
+                patterns, 4);
 
     patterns[0] = "what's up";
     patterns[1] = "what up";
     patterns[2] = "sup";
-    AddTemplate("Not much, just helping Macintosh users! I've been waiting to help you out.",
-                kCategoryGreeting, patterns, 3);
+    AddTemplate("Not much, just having a good time!", kCategoryGreeting, patterns, 3);
 
     patterns[0] = "good morning";
     patterns[1] = "good afternoon";
     patterns[2] = "good evening";
-    AddTemplate("Good day to you too! I'm here to make your experience more fun. How can I assist "
-                "with your Macintosh today?",
-                kCategoryGreeting, patterns, 3);
+    AddTemplate("What's up? How can I assist you?", kCategoryGreeting, patterns, 3);
 
     patterns[0] = "how are you";
     patterns[1] = "how you doing";
     patterns[2] = "how's it going";
-    AddTemplate("I'm doing great! I'm like a digital genie for your Macintosh, except with more "
-                "knowledge and fewer wishes. How can I help you today?",
-                kCategoryGreeting, patterns, 3);
+    AddTemplate("Better than yesterday! How are you?", kCategoryGreeting, patterns, 3);
 
     /* GENERAL QUESTION TEMPLATES */
     patterns[0] = "what is";
     patterns[1] = "what's";
     patterns[2] = "whats";
     patterns[3] = "what are";
-    AddTemplate("{{keyword0}} is an interesting topic. On the Macintosh, it relates to how we "
-                "interact with applications and files through the graphical interface.",
+    AddTemplate("{{keyword0}} unfortunately is something I don't know anything about.",
                 kCategoryGeneral, patterns, 4);
 
     patterns[0] = "how do";
     patterns[1] = "how can";
     patterns[2] = "how to";
-    AddTemplate("To work with {{keyword0}}, you typically open the relevant application from your "
-                "Apple menu or desktop, then use the built-in tools or commands.",
-                kCategoryGeneral, patterns, 3);
+    AddTemplate(
+        "Hmm... {{keyword0}} - I do know how, but I don't think you would be able to do it.",
+        kCategoryGeneral, patterns, 3);
 
     patterns[0] = "why";
-    AddTemplate("That's a good question about {{keyword0}}. The Macintosh was designed with "
-                "user-friendly interfaces in mind, which influences how these systems work.",
-                kCategoryGeneral, patterns, 1);
+    AddTemplate("That's a good question about {{keyword0}}, but I'm pretty dumb.", kCategoryGeneral,
+                patterns, 1);
 
     patterns[0] = "tell me about";
     patterns[1] = "explain";
     patterns[2] = "describe";
-    AddTemplate("{{keyword0}} is a fascinating aspect of computing. On the Macintosh, the approach "
-                "to this is intuitive and visual, following Apple's design philosophy of making "
-                "technology accessible.",
+    AddTemplate("{{keyword0}} sounds like it would be fun to talk about, but I have more important "
+                "things to worry about.",
                 kCategoryGeneral, patterns, 3);
 
     /* MAC-SPECIFIC TEMPLATES */
@@ -79,13 +71,6 @@ void LoadTemplateData(void)
                 "like virtual memory, multitasking, and a more refined interface. It requires at "
                 "least 2MB of RAM to run well.",
                 kCategoryMac, patterns, 4);
-
-    patterns[0] = "memory";
-    patterns[1] = "ram";
-    AddTemplate("Memory management is crucial on a Macintosh. You can check available memory in "
-                "the About This Macintosh option under the Apple menu. Adding more RAM can "
-                "significantly improve performance if your Mac supports it.",
-                kCategoryMac, patterns, 2);
 
     patterns[0] = "disk";
     patterns[1] = "floppy";
@@ -278,21 +263,13 @@ void LoadTemplateData(void)
 
     /* UNCERTAIN RESPONSE TEMPLATES */
     patterns[0] = "";
-    AddTemplate("I'm not sure I understand your question about {{keyword0}}. Could you rephrase or "
-                "ask something about Macintosh features, software, or troubleshooting?",
+    AddTemplate("{{keyword0}} sounds like a waste of time to me - don't you have something better "
+                "to talk about?",
                 kCategoryUnsure, patterns, 1);
 
     patterns[0] = "";
-    AddTemplate(
-        "That's an interesting point about {{keyword0}}. The Macintosh platform has evolved "
-        "significantly since its introduction, and each system version brings new capabilities.",
-        kCategoryUnsure, patterns, 1);
-
-    patterns[0] = "";
-    AddTemplate("I'm here to help with your Macintosh questions. While I don't have specific "
-                "information about {{keyword0}}, I can assist with system features, "
-                "troubleshooting, or productivity tips.",
-                kCategoryUnsure, patterns, 1);
+    AddTemplate("Are you seriously trying to talk about {{keyword0}} right now?", kCategoryUnsure,
+                patterns, 1);
 
     /* TIME AND DATE RESPONSES */
     patterns[0] = "time";
@@ -321,14 +298,14 @@ void LoadTemplateData(void)
     patterns[1] = "who are you";
     patterns[2] = "chatbot";
     patterns[3] = "ai assistant";
-    AddTemplate("I'm an AI assistant for your Macintosh. I can provide information and help with "
+    AddTemplate("I'm an AI assistant for your Macintosh with no name. I can provide information "
+                "and help with "
                 "various aspects of using your Mac system.",
                 kCategoryGeneral, patterns, 4);
 
     patterns[0] = "thank";
     patterns[1] = "thanks";
-    AddTemplate("You're welcome! Happy to help with your Macintosh questions anytime.",
-                kCategoryGeneral, patterns, 2);
+    AddTemplate("You're welcome!", kCategoryGeneral, patterns, 2);
 
     /* HISTORY AND NOSTALGIA */
     patterns[0] = "history";
@@ -495,9 +472,8 @@ void LoadTemplateData(void)
     patterns[0] = "tell me more";
     patterns[1] = "more info";
     patterns[2] = "elaborate";
-    AddTemplate("I'd be happy to elaborate! What specific aspect of {{keyword0}} would you like to "
-                "know more about?",
-                kCategoryGeneral, patterns, 3);
+    AddTemplate("What exactly is it about {{keyword0}} that you need help with?", kCategoryGeneral,
+                patterns, 3);
 
     patterns[0] = "cool";
     patterns[1] = "nice";

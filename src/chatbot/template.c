@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "../constants.h"
+#include "../ui/utils.h"
 #include "template.h"
 #include "template_data.h"
 
@@ -64,15 +65,7 @@ void AddTemplate(const char *response, unsigned char category, const char **patt
     gTemplateCount++;
 }
 
-/* Convert string to lowercase for case-insensitive matching */
-static void ConvertToLowercase(char *str)
-{
-    while (*str) {
-        if (*str >= 'A' && *str <= 'Z')
-            *str = *str + 32;
-        str++;
-    }
-}
+/* ConvertToLowercase function moved to utils.c */
 
 /* Add dynamic system information templates */
 void AddDynamicSystemTemplates(void)
@@ -105,13 +98,21 @@ void AddDynamicSystemTemplates(void)
     patterns[1] = "memory installed";
     patterns[2] = "installed ram";
     patterns[3] = "total memory";
+    patterns[4] = "how much memory";
+    patterns[5] = "how much ram";
 
-    long totalMem = MaxMem(NULL);
-    if (totalMem > 0) {
-        sprintf(buffer, "Your Mac has about %.1f MB of RAM installed.",
-                (float)totalMem / (1024 * 1024));
-        AddTemplate(buffer, kCategoryMac, patterns, 4);
+    /* Use Gestalt to get physical RAM - gestaltPhysicalRAMSize returns bytes */
+    long physicalRAM;
+    if (Gestalt(gestaltPhysicalRAMSize, &physicalRAM) == noErr) {
+        /* Format as MB with 1 decimal place */
+        float ramMB = (float)physicalRAM / (1024 * 1024);
+        sprintf(buffer, "Your Mac has about %.1f MB of RAM installed.", ramMB);
     }
+    else {
+        /* Fallback if Gestalt fails */
+        sprintf(buffer, "Your Mac has about 4 MB of RAM installed.");
+    }
+    AddTemplate(buffer, kCategoryMac, patterns, 6);
 
     patterns[0] = "free memory";
     patterns[1] = "available memory";
@@ -225,22 +226,83 @@ static void ExtractKeywords(const char *input, ExtractedKeyword *keywords, short
     /* Tokenize the input */
     token = strtok(buffer, " ,.!?;:\n\r\t");
     while (token && count < MAX_KEYWORDS) {
-        /* Skip very short words and common words */
-        if (strlen(token) >= 3 && strcmp(token, "the") != 0 && strcmp(token, "and") != 0 &&
-            strcmp(token, "for") != 0 && strcmp(token, "that") != 0 && strcmp(token, "with") != 0) {
+        /* Convert to lowercase for comparison */
+        char tokenLower[MAX_PATTERN_LENGTH];
+        strncpy(tokenLower, token, MAX_PATTERN_LENGTH - 1);
+        tokenLower[MAX_PATTERN_LENGTH - 1] = '\0';
+        ConvertToLowercase(tokenLower);
+
+        /* Skip very short words, common words, question words, etc. */
+        if (strlen(tokenLower) >= 3 &&
+            /* Articles, prepositions, conjunctions */
+            strcmp(tokenLower, "the") != 0 && strcmp(tokenLower, "and") != 0 &&
+            strcmp(tokenLower, "for") != 0 && strcmp(tokenLower, "that") != 0 &&
+            strcmp(tokenLower, "with") != 0 && strcmp(tokenLower, "but") != 0 &&
+            strcmp(tokenLower, "yet") != 0 && strcmp(tokenLower, "nor") != 0 &&
+            strcmp(tokenLower, "because") != 0 && strcmp(tokenLower, "from") != 0 &&
+            strcmp(tokenLower, "this") != 0 && strcmp(tokenLower, "these") != 0 &&
+            strcmp(tokenLower, "those") != 0 && strcmp(tokenLower, "there") != 0 &&
+            strcmp(tokenLower, "then") != 0 && strcmp(tokenLower, "than") != 0 &&
+            strcmp(tokenLower, "into") != 0 && strcmp(tokenLower, "onto") != 0 &&
+            strcmp(tokenLower, "upon") != 0 && strcmp(tokenLower, "over") != 0 &&
+            strcmp(tokenLower, "under") != 0 && strcmp(tokenLower, "above") != 0 &&
+            strcmp(tokenLower, "below") != 0 && strcmp(tokenLower, "near") != 0 &&
+
+            /* Question words */
+            strcmp(tokenLower, "what") != 0 && strcmp(tokenLower, "why") != 0 &&
+            strcmp(tokenLower, "how") != 0 && strcmp(tokenLower, "when") != 0 &&
+            strcmp(tokenLower, "where") != 0 && strcmp(tokenLower, "which") != 0 &&
+            strcmp(tokenLower, "who") != 0 && strcmp(tokenLower, "whose") != 0 &&
+            strcmp(tokenLower, "whom") != 0 && strcmp(tokenLower, "tell") != 0 &&
+            strcmp(tokenLower, "about") != 0 && strcmp(tokenLower, "explain") != 0 &&
+            strcmp(tokenLower, "describe") != 0 && strcmp(tokenLower, "show") != 0 &&
+            strcmp(tokenLower, "discuss") != 0 && strcmp(tokenLower, "define") != 0 &&
+
+            /* Common verbs */
+            strcmp(tokenLower, "are") != 0 && strcmp(tokenLower, "will") != 0 &&
+            strcmp(tokenLower, "does") != 0 && strcmp(tokenLower, "did") != 0 &&
+            strcmp(tokenLower, "can") != 0 && strcmp(tokenLower, "could") != 0 &&
+            strcmp(tokenLower, "would") != 0 && strcmp(tokenLower, "should") != 0 &&
+            strcmp(tokenLower, "may") != 0 && strcmp(tokenLower, "might") != 0 &&
+            strcmp(tokenLower, "have") != 0 && strcmp(tokenLower, "has") != 0 &&
+            strcmp(tokenLower, "had") != 0 && strcmp(tokenLower, "was") != 0 &&
+            strcmp(tokenLower, "were") != 0 && strcmp(tokenLower, "been") != 0 &&
+            strcmp(tokenLower, "being") != 0 && strcmp(tokenLower, "you") != 0 &&
+            strcmp(tokenLower, "not") != 0 && strcmp(tokenLower, "think") != 0 &&
+            strcmp(tokenLower, "know") != 0 && strcmp(tokenLower, "get") != 0 &&
+            strcmp(tokenLower, "see") != 0 && strcmp(tokenLower, "look") != 0 &&
+            strcmp(tokenLower, "make") != 0 && strcmp(tokenLower, "want") != 0 &&
+            strcmp(tokenLower, "come") != 0 && strcmp(tokenLower, "take") != 0 &&
+            strcmp(tokenLower, "use") != 0 && strcmp(tokenLower, "find") != 0 &&
+            strcmp(tokenLower, "give") != 0 && strcmp(tokenLower, "some") != 0 &&
+
+            /* Possessives and personal pronouns */
+            strcmp(tokenLower, "your") != 0 && strcmp(tokenLower, "yours") != 0 &&
+            strcmp(tokenLower, "our") != 0 && strcmp(tokenLower, "ours") != 0 &&
+            strcmp(tokenLower, "their") != 0 && strcmp(tokenLower, "theirs") != 0 &&
+            strcmp(tokenLower, "his") != 0 && strcmp(tokenLower, "her") != 0 &&
+            strcmp(tokenLower, "hers") != 0 && strcmp(tokenLower, "its") != 0 &&
+            strcmp(tokenLower, "mine") != 0 && strcmp(tokenLower, "they") != 0 &&
+            strcmp(tokenLower, "them") != 0 && strcmp(tokenLower, "she") != 0 &&
+            strcmp(tokenLower, "him") != 0 && strcmp(tokenLower, "one") != 0 &&
+            strcmp(tokenLower, "any") != 0 && strcmp(tokenLower, "all") != 0 &&
+            strcmp(tokenLower, "each") != 0 && strcmp(tokenLower, "both") != 0 &&
+            strcmp(tokenLower, "few") != 0 && strcmp(tokenLower, "many") != 0 &&
+            strcmp(tokenLower, "more") != 0 && strcmp(tokenLower, "most") != 0 &&
+            strcmp(tokenLower, "other") != 0 && strcmp(tokenLower, "such") != 0 &&
+            strcmp(tokenLower, "just") != 0 && strcmp(tokenLower, "very") != 0) {
 
             /* Copy token to keyword array */
-            strncpy(keywords[count].keyword, token, MAX_PATTERN_LENGTH - 1);
+            strncpy(keywords[count].keyword, tokenLower, MAX_PATTERN_LENGTH - 1);
             keywords[count].keyword[MAX_PATTERN_LENGTH - 1] = '\0';
-            ConvertToLowercase(keywords[count].keyword);
 
             /* Assign importance based on length and other factors */
-            keywords[count].importance = 50 + (strlen(token) * 5);
+            keywords[count].importance = 50 + (strlen(tokenLower) * 5);
 
             /* Increase importance for technical and specific terms */
             if (strstr("mac|macintosh|system|file|disk|memory|error|help|app|window|program|"
                        "software|problem|computer|network",
-                       token)) {
+                       tokenLower)) {
                 keywords[count].importance += 50;
             }
 
@@ -322,6 +384,7 @@ static void FillTemplate(char *response, const char *templateText, const Extract
     const char *src = templateText;
     char *dst       = response;
     short keywordIndex;
+    Boolean isFirstChar = true; /* Track if we're at the first character of the response */
 
     while (*src && (dst - response) < kMaxPromptLength - 1) {
         if (*src == '{' && *(src + 1) == '{') {
@@ -349,12 +412,37 @@ static void FillTemplate(char *response, const char *templateText, const Extract
 
                 /* Insert the keyword if available */
                 if (keywordIndex < keywordCount) {
-                    strcpy(dst, keywords[keywordIndex].keyword);
-                    dst += strlen(keywords[keywordIndex].keyword);
+                    /* If this is the first character of the response, capitalize the keyword */
+                    if (isFirstChar && keywords[keywordIndex].keyword[0] != '\0') {
+                        /* Copy first character uppercase */
+                        if (keywords[keywordIndex].keyword[0] >= 'a' &&
+                            keywords[keywordIndex].keyword[0] <= 'z') {
+                            *dst++ =
+                                keywords[keywordIndex].keyword[0] - 32; /* Convert to uppercase */
+                        }
+                        else {
+                            *dst++ = keywords[keywordIndex]
+                                         .keyword[0]; /* Already uppercase or non-alpha */
+                        }
+                        /* Copy the rest of the keyword */
+                        strcpy(dst, keywords[keywordIndex].keyword + 1);
+                        dst += strlen(keywords[keywordIndex].keyword) - 1;
+                        isFirstChar = false;
+                    }
+                    else {
+                        strcpy(dst, keywords[keywordIndex].keyword);
+                        dst += strlen(keywords[keywordIndex].keyword);
+                    }
                 }
                 else {
                     /* No keyword available, insert placeholder */
-                    strcpy(dst, "that");
+                    if (isFirstChar) {
+                        strcpy(dst, "That"); /* Capitalized */
+                        isFirstChar = false;
+                    }
+                    else {
+                        strcpy(dst, "that");
+                    }
                     dst += 4;
                 }
             }
@@ -368,6 +456,7 @@ static void FillTemplate(char *response, const char *templateText, const Extract
 
                 strcpy(dst, timeStr);
                 dst += strlen(timeStr);
+                isFirstChar = false;
 
                 /* Skip to end of slot marker */
                 while (*src && *src != '}')
@@ -391,6 +480,7 @@ static void FillTemplate(char *response, const char *templateText, const Extract
 
                 strcpy(dst, dateStr);
                 dst += strlen(dateStr);
+                isFirstChar = false;
 
                 /* Skip to end of slot marker */
                 while (*src && *src != '}')
@@ -412,7 +502,18 @@ static void FillTemplate(char *response, const char *templateText, const Extract
         }
         else {
             /* Regular character, copy it */
-            *dst++ = *src++;
+            if (isFirstChar && *src >= 'a' && *src <= 'z') {
+                /* Capitalize first character of the response */
+                *dst++      = *src - 32; /* Convert to uppercase */
+                isFirstChar = false;
+            }
+            else {
+                *dst++ = *src;
+                if (isFirstChar) {
+                    isFirstChar = false;
+                }
+            }
+            src++;
         }
     }
 

@@ -1,21 +1,9 @@
 #ifndef CHAT_WINDOW_H
 #define CHAT_WINDOW_H
 
-#include <Events.h>
-#include <Quickdraw.h>
+#include <Controls.h>
+#include <TextEdit.h>
 #include <Windows.h>
-
-/* Chat Window API
- *
- * This module implements a scrollable chat window with a fixed input field
- * at the bottom and a scrollable conversation history display at the top.
- *
- * Key design considerations:
- * - Optimized TEScroll implementation for smooth scrolling
- * - Proper clipping to reduce flicker during text updates
- * - Consistent scroll position maintenance between operations
- * - Efficient "thinking" indicator that avoids full refreshes
- */
 
 /* Initialize and create the chat window */
 void ChatWindow_Initialize(void);
@@ -26,17 +14,30 @@ void ChatWindow_Dispose(void);
 /* Handle all events for the chat window */
 void ChatWindow_HandleEvent(EventRecord *event);
 
-/* Render the chat window contents */
-void ChatWindow_Render(void);
+/* Get the active TEHandle for text operations */
+TEHandle ChatWindow_GetActiveTE(void);
+
+/* Determine if the display area has a selection */
+Boolean ChatWindow_HasDisplaySelection(void);
+
+/* Determine if the input area has a selection */
+Boolean ChatWindow_HasInputSelection(void);
+
+/* Perform a Cut operation on the appropriate TE */
+void ChatWindow_CutText(void);
+
+/* Perform a Copy operation on the appropriate TE */
+void ChatWindow_CopyText(void);
+
+/* Perform a Paste operation on the input TE */
+void ChatWindow_PasteText(void);
+
+/* Perform a Clear/Delete operation on the appropriate TE */
+void ChatWindow_ClearText(void);
+
 
 /* Get the window reference for the chat window */
 WindowRef ChatWindow_GetWindowRef(void);
-
-/* Get the display TextEdit handle for external operations */
-TEHandle ChatWindow_GetDisplayTE(void);
-
-/* Get the input TextEdit handle for external operations */
-TEHandle ChatWindow_GetInputTE(void);
 
 /* Show or hide the chat window */
 void ChatWindow_Show(Boolean visible);
@@ -44,11 +45,11 @@ void ChatWindow_Show(Boolean visible);
 /* Determine if the window is visible */
 Boolean ChatWindow_IsVisible(void);
 
-/* Send a message from the chat input field */
-void ChatWindow_SendMessage(void);
-
 /* Add a message to the chat display */
 void ChatWindow_AddMessage(const char *message, Boolean isUserMessage);
+
+/* Send a message from the chat input field */
+void ChatWindow_SendMessage(void);
 
 /* Perform idle processing (text cursor blinking, etc.) */
 void ChatWindow_Idle(void);

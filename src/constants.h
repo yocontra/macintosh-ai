@@ -14,16 +14,20 @@
 /* Resource IDs */
 enum {
     /* Menu IDs */
-    kMenuApple = 128,
-    kMenuFile,
-    kMenuEdit,
+    kMenuApple  = 128,
+    kMenuFile   = 129,
+    kMenuModels = 130,
 
     /* Menu item indices */
-    kItemAbout    = 1,
-    kItemChat     = 1,
-    kItemClose    = 2,
-    kItemToggleAI = 3,
-    kItemQuit     = 4,
+    kItemAbout = 1,
+    kItemChat  = 1,
+    kItemClose = 2,
+    kItemQuit  = 4,
+
+    /* Models menu items */
+    kItemMarkovModel   = 1,
+    kItemOpenAIModel   = 2,
+    kItemTemplateModel = 3,
 
     /* Window resource IDs */
     kAboutBoxID   = 128,

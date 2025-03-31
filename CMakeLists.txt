@@ -23,6 +23,7 @@ set(SRC_C
     src/ui/chat_window.c
     src/ui/about_window.c
     src/ui/window_manager.c
+    src/ui/utils.c
 )
 set(SRC_CPP
     # Add C++ files here, for example:
@@ -43,6 +44,7 @@ set(HEADER_FILES
     src/ui/chat_window.h
     src/ui/about_window.h
     src/ui/window_manager.h
+    src/ui/utils.h
 )
 set(RESOURCE_FILES
     src/main.r

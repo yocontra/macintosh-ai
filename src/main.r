@@ -22,24 +22,20 @@ resource 'MENU' (129) {
     {
         "Chat", noIcon, "L", noMark, plain;
         "Close", noIcon, "W", noMark, plain;
-        "Toggle AI Model", noIcon, "M", noMark, plain;
         "-", noIcon, noKey, noMark, plain;
         "Quit", noIcon, "Q", noMark, plain;
     }
 };
 
-/* Edit menu */
+/* Models menu */
 resource 'MENU' (130) {
     130, textMenuProc;
-    0, enabled;
-    "Edit";
+    allEnabled, enabled;
+    "Models";
     {
-        "Undo", noIcon, "Z", noMark, plain;
-        "-", noIcon, noKey, noMark, plain;
-        "Cut", noIcon, "X", noMark, plain;
-        "Copy", noIcon, "C", noMark, plain;
-        "Paste", noIcon, "V", noMark, plain;
-        "Clear", noIcon, noKey, noMark, plain;
+        "Markov Chain", noIcon, noKey, noMark, plain;
+        "OpenAI", noIcon, noKey, noMark, plain;
+        "Template", noIcon, noKey, noMark, plain;
     }
 };
 
