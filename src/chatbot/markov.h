@@ -15,10 +15,12 @@ typedef struct {
     char text[kMaxPromptLength]; /* Content of the message */
 } ConversationMessage;
 
-/* Structure for the entire conversation history */
+/* Structure for the entire conversation history using a circular buffer */
 typedef struct {
     ConversationMessage messages[kMaxConversationHistory];
-    short count; /* Number of messages in the history */
+    short count;  /* Number of messages in the history (up to kMaxConversationHistory) */
+    short head;   /* Index of the oldest message in the circular buffer */
+    short isFull; /* Boolean flag indicating if the buffer is full */
 } ConversationHistory;
 
 /* Train the Markov chain with new text */

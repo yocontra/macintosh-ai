@@ -50,19 +50,9 @@ void ChatWindow_Initialize(void)
     }
 
     /* Initialize the AI models here (using our selected model) */
-    /* Set the active AI model */
+    /* Set the active AI model and initialize (which adds welcome message) */
     SetActiveAIModel(sActiveModel);
-
-    /* Initialize the AI models */
     InitModels();
-
-    /* Add welcome message that will appear when the window is shown */
-    char welcomeMsg[200];
-    sprintf(welcomeMsg, "AI initialized! Using %s model. How can I help you today?",
-            (sActiveModel == kMarkovModel) ? "Markov chain (local)" : "OpenAI (remote)");
-
-    /* Add message to conversation history */
-    AddAIResponse(welcomeMsg);
 
     /* Check available memory first */
     err = CheckMemory();
@@ -837,7 +827,8 @@ TEHandle ChatWindow_GetInputTE(void)
 /* Refresh the conversation history display */
 static void RefreshConversationDisplay(void)
 {
-    short i;
+    short i, idx;
+    short maxMessages = gConversationHistory.count;
 
     /* Safety check */
     if (!sInitialized || sDisplayTE == NULL) {
@@ -847,9 +838,12 @@ static void RefreshConversationDisplay(void)
     /* Clear the text display first */
     TESetText("", 0, sDisplayTE);
 
-    /* Display all messages from the conversation history */
-    for (i = 0; i < gConversationHistory.count; i++) {
-        ConversationMessage *msg = &gConversationHistory.messages[i];
+    /* Display all messages from the conversation history in chronological order */
+    for (i = 0; i < maxMessages; i++) {
+        /* Calculate the index using the circular buffer logic - start at head and wrap around */
+        idx = (gConversationHistory.head + i) % kMaxConversationHistory;
+
+        ConversationMessage *msg = &gConversationHistory.messages[idx];
         if (msg->text[0] != '\0') {
             FormatAndAddMessage(msg->text, msg->type == kUserMessage);
         }
@@ -882,6 +876,10 @@ void ChatWindow_Show(Boolean visible)
     else {
         HideWindow(sWindow);
         sIsVisible = false;
+
+        /* Reset chat history and reinitialize the model when closing window */
+        SetActiveAIModel(sActiveModel); /* Ensure active model is set correctly */
+        InitModels();
     }
 }
 

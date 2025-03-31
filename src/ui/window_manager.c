@@ -1,3 +1,4 @@
+#include <Devices.h>
 #include <Events.h>
 #include <Menus.h>
 #include <Windows.h>
@@ -276,12 +277,45 @@ void WindowManager_HandleEvent(EventRecord *event)
     /* For update events, we no longer need to call Update directly.
      * Each window's HandleEvent function will handle update events for its own window. */
 
-    /* Global key command: Cmd-L to open chat window */
-    if (event->what == keyDown) {
+    /* Global key commands */
+    if (event->what == keyDown && (event->modifiers & cmdKey)) {
         char key = event->message & charCodeMask;
-        if ((event->modifiers & cmdKey) && (key == 'l' || key == 'L')) {
+        
+        /* Cmd-L to open chat window */
+        if (key == 'l' || key == 'L') {
             WindowManager_OpenWindow(kWindowTypeChat);
             WindowManager_CloseWindow(kWindowTypeSplash);
+            return;
+        }
+        
+        /* Cmd-W to close window */
+        else if (key == 'w' || key == 'W') {
+            WindowRef window = FrontWindow();
+            if (window) {
+                if (GetWindowKind(window) < 0) {
+                    /* Close desk accessory */
+                    CloseDeskAcc(GetWindowKind(window));
+                }
+                else if (window == WindowManager_GetWindowRef(kWindowTypeChat)) {
+                    /* Close chat window and switch back to splash mode */
+                    WindowManager_CloseWindow(kWindowTypeChat);
+                    WindowManager_OpenWindow(kWindowTypeSplash);
+                }
+                else if (window == WindowManager_GetWindowRef(kWindowTypeSplash)) {
+                    /* Closing main window quits app */
+                    QuitApplication(false);
+                }
+                else {
+                    /* Other window */
+                    DisposeWindow(window);
+                }
+            }
+            return;
+        }
+        
+        /* Cmd-Q to quit application */
+        else if (key == 'q' || key == 'Q') {
+            QuitApplication(false);
             return;
         }
     }
