@@ -8,10 +8,7 @@
 
 #include "../constants.h"
 #include "../error.h"
-#include "about_window.h"
-#include "chat_window.h"
 #include "menu.h"
-#include "splash_window.h"
 #include "window_manager.h"
 
 /*********************************************************************
@@ -28,7 +25,7 @@ void UpdateMenus(void)
     switch (gAppMode) {
     case kModeMainSplash:
         /* In splash mode, Close is disabled unless a window is open */
-        if (w && w == SplashWindow_GetWindowRef())
+        if (w && w == WindowManager_GetWindowRef(kWindowTypeSplash))
             EnableItem(m, kItemClose); /* Can close main window */
         else
             DisableItem(m, kItemClose);
@@ -39,7 +36,7 @@ void UpdateMenus(void)
 
     case kModeChatWindow:
         /* In chat mode, Close will close the chat window */
-        if (w && w == ChatWindow_GetWindowRef())
+        if (w && w == WindowManager_GetWindowRef(kWindowTypeChat))
             EnableItem(m, kItemClose); /* Can close chat window */
         else
             DisableItem(m, kItemClose);
@@ -58,8 +55,8 @@ void UpdateMenus(void)
         EnableItem(m, 5);
         EnableItem(m, 6);
     }
-    else if (gAppMode == kModeChatWindow && ChatWindow_IsVisible() &&
-             w == ChatWindow_GetWindowRef()) {
+    else if (gAppMode == kModeChatWindow && WindowManager_IsWindowVisible(kWindowTypeChat) &&
+             w == WindowManager_GetWindowRef(kWindowTypeChat)) {
         /* Chat window is in front: Enable copy and possibly other edit operations */
         EnableItem(m, 4); /* Copy */
 
@@ -89,7 +86,7 @@ void DoMenuCommand(long menuCommand)
 
     if (menuID == kMenuApple) {
         if (menuItem == kItemAbout)
-            ShowAboutBox();
+            WindowManager_OpenWindow(kWindowTypeAbout);
         else {
             GetMenuItemText(GetMenu(128), menuItem, str);
             OpenDeskAcc(str);
@@ -99,15 +96,17 @@ void DoMenuCommand(long menuCommand)
         switch (menuItem) {
         case kItemChat:
             /* This switches between modes */
-            if (gAppMode == kModeMainSplash || !ChatWindow_IsVisible()) {
-                /* Open chat window and switch to chat mode */
-                ChatWindow_Show(true);
-                SplashWindow_Show(false);
-                gAppMode = kModeChatWindow;
+            if (gAppMode == kModeMainSplash || !WindowManager_IsWindowVisible(kWindowTypeChat)) {
+                /* Open chat window and close splash window */
+                WindowManager_OpenWindow(kWindowTypeChat);
+                WindowManager_CloseWindow(kWindowTypeSplash);
             }
             else {
                 /* Already in chat mode, bring window to front */
-                SelectWindow(ChatWindow_GetWindowRef());
+                WindowRef w = WindowManager_GetWindowRef(kWindowTypeChat);
+                if (w != NULL) {
+                    SelectWindow(w);
+                }
             }
             break;
 
@@ -118,13 +117,12 @@ void DoMenuCommand(long menuCommand)
                     /* Close desk accessory */
                     CloseDeskAcc(GetWindowKind(w));
                 }
-                else if (w == ChatWindow_GetWindowRef()) {
+                else if (w == WindowManager_GetWindowRef(kWindowTypeChat)) {
                     /* Close chat window and switch back to splash mode */
-                    ChatWindow_Show(false);
-                    SplashWindow_Show(true);
-                    gAppMode = kModeMainSplash;
+                    WindowManager_CloseWindow(kWindowTypeChat);
+                    WindowManager_OpenWindow(kWindowTypeSplash);
                 }
-                else if (w == SplashWindow_GetWindowRef()) {
+                else if (w == WindowManager_GetWindowRef(kWindowTypeSplash)) {
                     /* Close main window (not normally done - usually = quit) */
                     QuitApplication(false);
                 }
@@ -145,7 +143,8 @@ void DoMenuCommand(long menuCommand)
         if (!SystemEdit(menuItem - 1)) {
             /* Edit command not handled by desk accessory */
             w = FrontWindow();
-            if (ChatWindow_IsVisible() && w == ChatWindow_GetWindowRef()) {
+            if (WindowManager_IsWindowVisible(kWindowTypeChat) &&
+                w == WindowManager_GetWindowRef(kWindowTypeChat)) {
                 /* Handle all edit menu operations in chat window */
                 switch (menuItem) {
                 case 1: /* Undo - not supported in TextEdit */
@@ -154,17 +153,19 @@ void DoMenuCommand(long menuCommand)
                     TECut(gChatInputTE);
                     break;
                 case 4: /* Copy */
-                    /* Get the active text field based on which one has a selection */
-                    TEHandle activeTE  = ChatWindow_GetInputTE();
-                    TEHandle displayTE = ChatWindow_GetDisplayTE();
-
-                    if (displayTE != NULL && (*displayTE)->selStart < (*displayTE)->selEnd) {
+                    /*
+                     * For TextEdit operations, we still need to access the TE handles directly
+                     * This is a limitation of the current architecture, as TextEdit handles
+                     * are not abstracted through the window manager.
+                     */
+                    if (gChatDisplayTE != NULL &&
+                        (*gChatDisplayTE)->selStart < (*gChatDisplayTE)->selEnd) {
                         /* Display TE has selection, use it for copy */
-                        TECopy(displayTE);
+                        TECopy(gChatDisplayTE);
                     }
-                    else if (activeTE != NULL) {
+                    else if (gChatInputTE != NULL) {
                         /* Default to input field */
-                        TECopy(activeTE);
+                        TECopy(gChatInputTE);
                     }
                     break;
                 case 5: /* Paste */

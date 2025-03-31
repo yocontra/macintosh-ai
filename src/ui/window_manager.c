@@ -48,7 +48,10 @@ void WindowManager_Dispose(void)
         gWindowInitialized[kWindowTypeChat] = false;
     }
 
-    /* About window is typically a dialog, so no explicit dispose needed */
+    if (gWindowInitialized[kWindowTypeAbout]) {
+        AboutWindow_Dispose();
+        gWindowInitialized[kWindowTypeAbout] = false;
+    }
 }
 
 /* Open a specific type of window */
@@ -66,7 +69,7 @@ void WindowManager_OpenWindow(WindowType windowType)
             break;
 
         case kWindowTypeAbout:
-            /* About window is created on demand */
+            AboutWindow_Initialize();
             break;
         }
         gWindowInitialized[windowType] = true;
@@ -85,7 +88,7 @@ void WindowManager_OpenWindow(WindowType windowType)
         break;
 
     case kWindowTypeAbout:
-        ShowAboutBox();
+        AboutWindow_Show(true);
         /* About box doesn't change the foreground window type */
         break;
     }
@@ -106,7 +109,7 @@ void WindowManager_CloseWindow(WindowType windowType)
             break;
 
         case kWindowTypeAbout:
-            /* About box closes itself */
+            AboutWindow_Show(false);
             break;
         }
     }
@@ -171,8 +174,7 @@ WindowRef WindowManager_GetWindowRef(WindowType windowType)
         return ChatWindow_GetWindowRef();
 
     case kWindowTypeAbout:
-        /* About box doesn't expose a WindowRef */
-        return NULL;
+        return AboutWindow_GetWindowRef();
 
     default:
         return NULL;
@@ -190,8 +192,7 @@ Boolean WindowManager_IsWindowVisible(WindowType windowType)
         return ChatWindow_IsVisible();
 
     case kWindowTypeAbout:
-        /* Can't check about box visibility */
-        return false;
+        return AboutWindow_IsVisible();
 
     default:
         return false;
@@ -282,6 +283,10 @@ void WindowManager_HandleEvent(EventRecord *event)
         }
         else if (window == ChatWindow_GetWindowRef()) {
             ChatWindow_Update();
+            return;
+        }
+        else if (window == AboutWindow_GetWindowRef()) {
+            AboutWindow_Update();
             return;
         }
     }

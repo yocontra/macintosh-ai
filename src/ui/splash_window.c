@@ -16,6 +16,7 @@
 static WindowRef sWindow              = NULL;
 static ControlHandle sStartChatButton = NULL;
 static Boolean sInitialized           = false;
+static Boolean sIsVisible             = false;
 
 /* Initialize a pattern */
 static void PatternInit(Pattern *pattern, unsigned char b1, unsigned char b2, unsigned char b3,
@@ -157,31 +158,30 @@ void SplashWindow_Initialize(void)
         HandleError(kErrMemoryFull, kCtxCreatingMainWindow, false); /* Non-fatal */
         return;
     }
-    
+
     /* Calculate screen dimensions */
-    screenRect = qd.screenBits.bounds;
-    screenWidth = screenRect.right - screenRect.left;
+    screenRect   = qd.screenBits.bounds;
+    screenWidth  = screenRect.right - screenRect.left;
     screenHeight = screenRect.bottom - screenRect.top;
-    
+
     /* Make the window about 75% of screen width/height */
-    windowWidth = (screenWidth * 3) / 4;
+    windowWidth  = (screenWidth * 3) / 4;
     windowHeight = (screenHeight * 3) / 4;
-    
+
     /* Create centered window rectangle */
-    SetRect(&windowRect, 
-            (screenWidth - windowWidth) / 2, 
-            (screenHeight - windowHeight) / 2,
-            (screenWidth - windowWidth) / 2 + windowWidth, 
+    SetRect(&windowRect, (screenWidth - windowWidth) / 2, (screenHeight - windowHeight) / 2,
+            (screenWidth - windowWidth) / 2 + windowWidth,
             (screenHeight - windowHeight) / 2 + windowHeight);
-    
+
     /* Create the window directly like the chat window does */
-    sWindow = NewWindow(NULL, &windowRect, "\pAI for Macintosh", true, documentProc, (WindowPtr)-1, true, 0);
-    
+    sWindow = NewWindow(NULL, &windowRect, "\pAI for Macintosh", true, documentProc, (WindowPtr)-1,
+                        true, 0);
+
     if (sWindow == NULL) {
         HandleError(kErrWindowCreation, kCtxCreatingMainWindow, false); /* Non-fatal */
         return;
     }
-    
+
     /* Make window visible and active */
     ShowWindow(sWindow);
     SelectWindow(sWindow);
@@ -208,7 +208,7 @@ void SplashWindow_Initialize(void)
         HandleError(kErrControlCreation, kCtxCreatingButton, false); /* Non-fatal */
         /* We can continue without the button - user can still use Cmd-L */
     }
-    
+
     /* Force a redraw of the entire window */
     InvalRect(&sWindow->portRect);
 
@@ -316,30 +316,30 @@ void SplashWindow_Show(Boolean visible)
         /* Draw all the UI elements to ensure they're shown correctly */
         SetPort(sWindow);
         DrawSplashWindowUI(sWindow);
-        
+
         /* Make sure the button is visible */
         if (sStartChatButton != NULL) {
             DrawControls(sWindow);
         }
-        
+
         /* Show and select the window */
         ShowWindow(sWindow);
         SelectWindow(sWindow);
-        
+
         /* Force complete redraw */
         InvalRect(&sWindow->portRect);
+
+        /* Update visibility tracking */
+        sIsVisible = true;
     }
     else {
         HideWindow(sWindow);
+        sIsVisible = false;
     }
 }
 
 /* Determine if the window is visible */
 Boolean SplashWindow_IsVisible(void)
 {
-    if (sWindow == NULL) {
-        return false;
-    }
-
-    return ((WindowPeek)sWindow)->visible;
+    return sIsVisible;
 }
