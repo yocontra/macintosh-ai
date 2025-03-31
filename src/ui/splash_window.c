@@ -2,9 +2,7 @@
 #include <Events.h>
 #include <Fonts.h>
 #include <Memory.h>
-#include <Menus.h>
 #include <Quickdraw.h>
-#include <Resources.h>
 #include <Windows.h>
 
 #include "../constants.h"

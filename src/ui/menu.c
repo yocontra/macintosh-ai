@@ -1,8 +1,6 @@
 #include <Devices.h>
 #include <Events.h>
 #include <Menus.h>
-#include <Quickdraw.h>
-#include <Sound.h>
 #include <TextEdit.h>
 #include <Windows.h>
 

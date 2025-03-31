@@ -1,6 +1,4 @@
 #include <Events.h>
-#include <Menus.h>
-#include <Quickdraw.h>
 #include <Windows.h>
 
 #include "../constants.h"

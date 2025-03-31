@@ -6,7 +6,6 @@
 #include <Resources.h>
 #include <Sound.h>
 #include <TextEdit.h>
-#include <ToolUtils.h>
 #include <Windows.h>
 
 #include "ai_model.h"

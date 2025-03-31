@@ -1,6 +1,4 @@
 #include <Events.h>
-#include <Fonts.h>
-#include <Memory.h>
 #include <Resources.h>
 #include <TextEdit.h>
 #include <Windows.h>

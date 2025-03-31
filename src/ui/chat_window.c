@@ -1,12 +1,9 @@
 #include <Controls.h>
 #include <Fonts.h>
 #include <Memory.h>
-#include <Menus.h>
 #include <Quickdraw.h>
-#include <Resources.h>
 #include <TextEdit.h>
 #include <TextUtils.h>
-#include <ToolUtils.h>
 #include <Windows.h>
 #include <stdio.h>
 #include <string.h>
