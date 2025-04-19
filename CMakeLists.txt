@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.10)
 
 # Project name can be configured from command line with -DAPP_NAME=YourAppName
 if(NOT DEFINED APP_NAME)
@@ -15,10 +15,12 @@ set(SRC_C
     src/error.c
     src/chatbot/markov.c
     src/chatbot/markov_data.c
-    src/chatbot/openai.c
     src/chatbot/model_manager.c
     src/chatbot/template.c
     src/chatbot/template_data.c
+    src/chatbot/openai.c
+    src/chatbot/claude_client.c
+    src/chatbot/gemini_client.c
     src/ui/splash_window.c
     src/ui/chat_window.c
     src/ui/about_window.c
@@ -26,8 +28,6 @@ set(SRC_C
     src/ui/utils.c
 )
 set(SRC_CPP
-    # Add C++ files here, for example:
-    # src/ai_interface.cpp
 )
 set(HEADER_FILES
     src/ui/menu.h
@@ -36,10 +36,9 @@ set(HEADER_FILES
     src/constants.h
     src/chatbot/markov.h
     src/chatbot/markov_data.h
-    src/chatbot/openai.h
     src/chatbot/template.h
     src/chatbot/template_data.h
-    src/chatbot/ai_model_interface.h
+    src/chatbot/openai.h
     src/ui/splash_window.h
     src/ui/chat_window.h
     src/ui/about_window.h
@@ -53,6 +52,7 @@ set(RESOURCE_FILES
 # Configuration options
 option(USE_MINIVMAC "Use Mini vMac for running the application" ON)
 option(ENABLE_CLANG_FORMAT "Enable clang-format formatting" ON)
+option(DEBUG "Enable debug output with DebugStr calls" OFF)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -114,8 +114,19 @@ else()
         ${RESOURCE_FILES}
     )
 
+    # Add DEBUG definition if enabled
+    if(DEBUG)
+        target_compile_definitions(${APP_NAME} PRIVATE DEBUG=1)
+    endif()
+
     # Save 200KB+ of code by removing unused stuff
     set_target_properties(${APP_NAME} PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
+    
+    # Our dependencies
+    target_link_libraries(${APP_NAME} 
+        MacHTTP
+        cJSON
+    )
     
     # Add custom targets
     add_custom_target(build

@@ -1,0 +1,13 @@
+[submodule "libs/mactcphelper"]
+	path = libs/mactcphelper
+	url = https://github.com/antscode/MacTCPHelper.git
+[submodule "libs/cjson"]
+	path = libs/cjson
+	url = https://github.com/DaveGamble/cJSON.git
+[submodule "libs/machttp"]
+	path = libs/machttp
+	url = https://github.com/yocontra/MacHTTP.git
+	branch = patch-1
+[submodule "libs/mbedtls-mac-68k"]
+	path = libs/mbedtls-mac-68k
+	url = https://github.com/antscode/mbedtls-Mac-68k.git
