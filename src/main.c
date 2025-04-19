@@ -10,7 +10,7 @@
 
 #include "constants.h"
 #include "error.h"
-#include "sound/beepbop.c"
+#include "sound/beepbop.h"
 #include "ui/event.h"
 #include "ui/menu.h"
 #include "ui/window_manager.h"

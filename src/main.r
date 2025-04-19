@@ -39,9 +39,19 @@ resource 'MENU' (130) {
     }
 };
 
+/* Extras menu */
+resource 'MENU' (131) {
+    131, textMenuProc;
+    allEnabled, enabled;
+    "Extras";
+    {
+        "Play Music", noIcon, noKey, noMark, plain;
+    }
+};
+
 /* Menu bar definition */
 resource 'MBAR' (128) {
-    { 128, 129, 130 };
+    { 128, 129, 130, 131 };
 };
 
 /* String resources */

@@ -19,8 +19,8 @@ set(SRC_C
     src/chatbot/template.c
     src/chatbot/template_data.c
     src/chatbot/openai.c
-    src/chatbot/claude_client.c
-    src/chatbot/gemini_client.c
+    src/sound/beepbop.c
+    src/sound/tetris.c
     src/ui/splash_window.c
     src/ui/chat_window.c
     src/ui/about_window.c
@@ -39,6 +39,8 @@ set(HEADER_FILES
     src/chatbot/template.h
     src/chatbot/template_data.h
     src/chatbot/openai.h
+    src/sound/beepbop.h
+    src/sound/tetris.h
     src/ui/splash_window.h
     src/ui/chat_window.h
     src/ui/about_window.h

@@ -17,6 +17,7 @@ enum {
     kMenuApple  = 128,
     kMenuFile   = 129,
     kMenuModels = 130,
+    kMenuExtras = 131,
 
     /* Menu item indices */
     kItemAbout = 1,
@@ -28,6 +29,9 @@ enum {
     kItemMarkovModel   = 1,
     kItemOpenAIModel   = 2,
     kItemTemplateModel = 3,
+    
+    /* Extras menu items */
+    kItemPlayMusic = 1,
 
     /* Window resource IDs */
     kAboutBoxID   = 128,

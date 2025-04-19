@@ -7,6 +7,7 @@
 #include "../chatbot/model_manager.h"
 #include "../constants.h"
 #include "../error.h"
+#include "../sound/tetris.h"
 #include "chat_window.h"
 #include "menu.h"
 #include "window_manager.h"
@@ -20,6 +21,7 @@ void UpdateMenus(void)
 {
     MenuRef fileMenu   = GetMenu(kMenuFile);
     MenuRef modelsMenu = GetMenu(kMenuModels);
+    MenuRef extrasMenu = GetMenu(kMenuExtras);
     WindowRef w        = FrontWindow();
 
     /* First determine which window is in front to properly set menu items */
@@ -151,6 +153,14 @@ void DoMenuCommand(long menuCommand)
                 /* Update menu to show check mark next to active model */
                 UpdateMenus();
             }
+        }
+    }
+    else if (menuID == kMenuExtras) {
+        switch (menuItem) {
+        case kItemPlayMusic:
+            /* Play the tetris theme music */
+            TetrisPlayMusic();
+            break;
         }
     }
 
