@@ -7,6 +7,10 @@ CMakeFiles/
 cmake_install.cmake
 *.o
 *.a
+# …except the vendored prebuilt archives: Claude 68's mbedTLS 3.2.1 build and
+# MacTCPHelper. They are build inputs, not build products (see UPSTREAM.md).
+!libs/net68k/mbedtls/*.a
+!libs/net68k/mactcp/*.a
 *.so
 *.dylib
 *.dSYM/
