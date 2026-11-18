@@ -3,6 +3,7 @@
 #include <Fonts.h>
 #include <Memory.h>
 #include <Menus.h>
+#include <Processes.h>
 #include <Quickdraw.h>
 #include <Resources.h>
 #include <Sound.h>
@@ -21,6 +22,9 @@
 
 /* Application mode tracking (used by multiple modules) */
 short gAppMode = kModeMainSplash;
+
+/* Tick count until which main keeps asking to be the front process. */
+static unsigned long sFrontProcessUntil = 0;
 
 /*********************************************************************
  * MAIN PROGRAM
@@ -94,9 +98,26 @@ int main(void)
         return 1; /* Should never reach here due to fatal error */
     }
 
+    /* An application started from Startup Items is not automatically the
+       active process: the Finder keeps the menu bar until something brings us
+       forward, and until then the first click on our window is only consumed
+       by the activation and every keyboard shortcut goes to the Finder.
+       Ask once here, and again from the idle loop for the first few seconds:
+       at this point the Finder is often still finishing its own startup and
+       the first request is ignored. */
+    {
+        ProcessSerialNumber psn;
+
+        if (GetCurrentProcess(&psn) == noErr) {
+            SetFrontProcess(&psn);
+        }
+    }
+
     /*----------------------------------------
      * Main event loop
      *----------------------------------------*/
+    sFrontProcessUntil = TickCount() + 300; /* ~5 s at 60 Hz */
+
     for (;;) {
         EventRecord event;
 
@@ -108,6 +129,18 @@ int main(void)
 
         /* Drive the streaming API request and blink the insertion point */
         ChatWindow_Idle();
+
+        /* Keep asking to be the active process for the first few seconds: an
+           application launched from Startup Items is not front automatically,
+           and while the Finder is still starting it ignores the first
+           request. After that this stops for good. */
+        if (TickCount() < sFrontProcessUntil) {
+            ProcessSerialNumber psn;
+
+            if (GetCurrentProcess(&psn) == noErr) {
+                SetFrontProcess(&psn);
+            }
+        }
 
         /* WaitNextEvent yields time to other applications while waiting */
         if (WaitNextEvent(everyEvent, &event, 1, NULL)) {

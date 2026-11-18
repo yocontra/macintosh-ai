@@ -8,9 +8,10 @@
 set -eu
 . "$(dirname -- "$0")/_lib.sh"
 
-# The Finder is frontmost after boot; click the splash window (not the button)
-# so the menu command reaches the app.
-emu click 512 190
+# The app brings itself to the front on launch; if it has not, the menu bar
+# still belongs to the Finder and the shortcut would go there.
+emu wait-ocr "Models" --region menu_bar --timeout 30 >/dev/null
+
 emu key "cmd+,"
 ocr_text=$(emu wait-ocr "Model:" --timeout 30)
 printf '%s\n' "$ocr_text"

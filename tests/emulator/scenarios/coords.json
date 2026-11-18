@@ -9,25 +9,70 @@
     "or run tesseract with --psm 6 tsv on a captured frame and inspect the",
     "word boxes (README.md has the one-liner)."
   ],
-
   "regions": {
-    "full":         [0, 0, 1024, 768],
-    "menu_bar":     [0, 0, 1024, 24],
-    "splash":       [128, 96, 768, 576],
-    "chat_input":   [120, 678, 780, 44],
-    "chat_display": [113, 70, 783, 583]
+    "full": [
+      0,
+      0,
+      1024,
+      768
+    ],
+    "menu_bar": [
+      0,
+      0,
+      1024,
+      24
+    ],
+    "splash": [
+      128,
+      96,
+      768,
+      576
+    ],
+    "chat_input": [
+      120,
+      678,
+      780,
+      44
+    ],
+    "chat_display": [
+      113,
+      70,
+      783,
+      583
+    ]
   },
-
   "points": {
-    "splash_start":    [512, 318],
-
-    "chat_input":      [512, 698],
-
-    "settings_provider": [349, 97],
-    "settings_model":    [349, 121],
-    "settings_key":      [349, 145],
-    "settings_base_url": [349, 169],
-    "settings_ok":       [340, 218],
-    "settings_cancel":   [410, 218]
+    "splash_start": [
+      511,
+      298
+    ],
+    "chat_input": [
+      512,
+      698
+    ],
+    "settings_provider": [
+      349,
+      97
+    ],
+    "settings_model": [
+      349,
+      121
+    ],
+    "settings_key": [
+      349,
+      145
+    ],
+    "settings_base_url": [
+      349,
+      169
+    ],
+    "settings_ok": [
+      340,
+      218
+    ],
+    "settings_cancel": [
+      410,
+      218
+    ]
   }
 }

@@ -10,7 +10,8 @@
 set -eu
 . "$(dirname -- "$0")/_lib.sh"
 
-emu click --name splash_start   # also brings the app to the front
+emu wait-ocr "Models" --region menu_bar --timeout 30 >/dev/null
+emu click --name splash_start
 emu wait-ocr "AI Chat" --timeout 30 >/dev/null || true
 
 emu click --name chat_input
