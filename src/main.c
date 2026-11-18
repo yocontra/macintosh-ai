@@ -130,10 +130,10 @@ int main(void)
         /* Drive the streaming API request and blink the insertion point */
         ChatWindow_Idle();
 
-        /* Keep asking to be the active process for the first few seconds: an
+        /* Ask to be the active process for the first few seconds. An
            application launched from Startup Items is not front automatically,
-           and while the Finder is still starting it ignores the first
-           request. After that this stops for good. */
+           and while the Finder is still finishing its own startup it ignores
+           the request, so a single call loses the race. */
         if (TickCount() < sFrontProcessUntil) {
             ProcessSerialNumber psn;
 

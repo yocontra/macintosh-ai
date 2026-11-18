@@ -33,9 +33,9 @@ resource 'MENU' (130) {
     allEnabled, enabled;
     "Models";
     {
-        "Markov Chain", noIcon, noKey, noMark, plain;
-        "Remote AI", noIcon, noKey, noMark, plain;
-        "Template", noIcon, noKey, noMark, plain;
+        "Markov Chain", noIcon, "1", noMark, plain;
+        "Remote AI", noIcon, "2", noMark, plain;
+        "Template", noIcon, "3", noMark, plain;
     }
 };
 
