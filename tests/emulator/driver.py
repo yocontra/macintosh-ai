@@ -421,19 +421,19 @@ def menu_select(title_xy, item_xy) -> None:
     _post_mouse("moved", title_xy[0], title_xy[1])
     time.sleep(0.05)
     _post_mouse("down", title_xy[0], title_xy[1])
-    time.sleep(0.15)
+    time.sleep(0.30)
     # A couple of intermediate drags so the guest sees the highlight move.
     steps = 5
     for i in range(1, steps + 1):
         gx = title_xy[0] + (item_xy[0] - title_xy[0]) * i / steps
         gy = title_xy[1] + (item_xy[1] - title_xy[1]) * i / steps
         _post_mouse("dragged", gx, gy)
-        time.sleep(0.03)
-    time.sleep(0.1)
+        time.sleep(0.06)
+    time.sleep(0.20)
     _post_mouse("dragged", item_xy[0], item_xy[1])
-    time.sleep(0.05)
+    time.sleep(0.20)
     _post_mouse("up", item_xy[0], item_xy[1])
-    time.sleep(0.1)
+    time.sleep(0.20)
 
 
 def click_guest(gx: float, gy: float, count: int = 1, shift: bool = False) -> None:

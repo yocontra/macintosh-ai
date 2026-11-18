@@ -256,10 +256,15 @@ in the harness, not (as far as I could establish) in the app:
   the title opens and immediately dismisses the menu without selecting an item.
   `driver.py` now has a `menu <title-x> <title-y> <item-x> <item-y>` command
   that presses on the title, drags to the item and releases there.
-- With that, the guest leaves the menu title highlighted and never draws the
-  drop-down, i.e. `MenuSelect` appears to be waiting for a mouse-up that
-  `CGEventPost` already delivered. Whatever is dropped there, the result is
-  that no application menu can be driven from this harness yet.
+- With that, the guest highlights the menu title and never draws the
+  drop-down. `MenuSelect` is a tracking *loop* that polls `Button()`, so this
+  means the guest's mouse button still reads down: the mouse-down arrives, the
+  mouse-up does not. Posting the up again, several times, at the item location
+  changes nothing; the app stays in the loop.
+- The same asymmetry shows up on controls: clicking "Start Chat" highlights the
+  button but never completes the click. So it is not coordinates and not the
+  app — the emulator's synthetic input loses the button-up once the guest is in
+  a modal tracking loop.
 - Cmd-, reaches the app as a key event but `MenuKey` does not match it, so the
   keyboard equivalent is not a workaround either.
 
