@@ -14,6 +14,11 @@
  *      -> exactly "Hello world", APIParse_Done() != 0.
  *   3. Truncated stream (no terminal event)
  *      -> partial text "Hello world", APIParse_Done() == 0.
+ *   4. Gemini stream "Hel" / "lo" / " world" terminated by candidates[0]
+ *      .finishReason -> exactly "Hello world", APIParse_Done() != 0.
+ *   5. Gemini JSON object split across two APIParse_Feed() calls.
+ *   6. Gemini bare response array (server without alt=sse) on one line.
+ *   7. OpenAI-compatible stream from a non-OpenAI host (same wire shape).
  *
  * The test is plain C. It does not include <Types.h>, Toolbox headers or any
  * net68k header; only api_parse.h and the C standard library.
@@ -24,10 +29,11 @@
 
 #include "api_parse.h"
 
-/* Provider values match APIProvider in api_client.h (which pulls in <Types.h>
- * and therefore cannot be included by a host test). */
+/* Dialect values mirror api_client.h / api_parse.h (which cannot be included
+ * here without <Types.h>). */
 #define PROVIDER_ANTHROPIC 0
 #define PROVIDER_OPENAI 1
+#define PROVIDER_GEMINI 2
 
 #define TEXT_BUFFER_SIZE 4096
 
@@ -160,6 +166,69 @@ static const char *const kOpenAIChunks[] = {
 
 #define OPENAI_CHUNK_COUNT ((int)(sizeof kOpenAIChunks / sizeof kOpenAIChunks[0]))
 
+/* ------------------------------- Gemini ------------------------------- */
+
+static const char *const kGeminiChunks[] = {
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}],"
+    "\"role\":\"model\"},\"index\":0}],\"modelVersion\":\"gemini-test\"}\r\n\r\n",
+
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}],"
+    "\"role\":\"model\"},\"index\":0}],\"modelVersion\":\"gemini-test\"}\r\n\r\n",
+
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}],"
+    "\"role\":\"model\"},\"index\":0}],\"modelVersion\":\"gemini-test\"}\r\n\r\n",
+
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"\"}],"
+    "\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],"
+    "\"usageMetadata\":{\"totalTokenCount\":5}}\r\n\r\n"
+};
+
+#define GEMINI_CHUNK_COUNT ((int)(sizeof kGeminiChunks / sizeof kGeminiChunks[0]))
+
+/* One JSON object delivered across two body chunks: the split is inside the
+ * string value, so the accumulator has to hold the half-line, not parse it. */
+static const char *const kGeminiSplitChunks[] = {
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel",
+
+    "lo world\"}]},\"finishReason\":\"STOP\",\"index\":0}]}\n\n"
+};
+
+#define GEMINI_SPLIT_CHUNK_COUNT ((int)(sizeof kGeminiSplitChunks / sizeof kGeminiSplitChunks[0]))
+
+/* A server that answered without alt=sse: one bare response array, no data:
+ * prefix, first element carrying both the text and the finishReason. */
+static const char *const kGeminiArrayChunks[] = {
+    "[{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello world\"}],"
+    "\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}]},"
+    "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ignored\"}],"
+    "\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}]}]\n"
+};
+
+#define GEMINI_ARRAY_CHUNK_COUNT ((int)(sizeof kGeminiArrayChunks / sizeof kGeminiArrayChunks[0]))
+
+/* ------------------- OpenAI-compatible, non-OpenAI host -------------------
+   Same wire shape as OpenAI but different id/model, as a local llama.cpp or
+   Groq-style endpoint returns.  Proves the OpenAI path is provider-agnostic. */
+
+static const char *const kOpenAICompatChunks[] = {
+    "data: {\"id\":\"chatcmpl-local-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+    "\"model\":\"llama-3.2-3b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},"
+    "\"finish_reason\":null}]}\n\n",
+
+    "data: {\"id\":\"chatcmpl-local-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+    "\"model\":\"llama-3.2-3b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},"
+    "\"finish_reason\":null}]}\n\n",
+
+    "data: {\"id\":\"chatcmpl-local-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+    "\"model\":\"llama-3.2-3b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},"
+    "\"finish_reason\":\"stop\"}]}\n\n",
+
+    "data: [DONE]\n\n"
+};
+
+#define OPENAI_COMPAT_CHUNK_COUNT \
+    ((int)(sizeof kOpenAICompatChunks / sizeof kOpenAICompatChunks[0]))
+
 /* --------------------------- Feed semantics --------------------------- */
 
 static void test_feed_return_value(void)
@@ -191,6 +260,25 @@ int main(void)
                  "anthropic truncated stream");
     check_stream(PROVIDER_OPENAI, kOpenAIChunks, OPENAI_CHUNK_COUNT - 1, "Hello world", 0,
                  "openai truncated stream");
+
+    /* Gemini: deltas at candidates[0].content.parts[0].text, terminal
+     * candidates[0].finishReason (any value). */
+    check_stream(PROVIDER_GEMINI, kGeminiChunks, GEMINI_CHUNK_COUNT, "Hello world", 1,
+                 "gemini complete stream");
+    check_stream(PROVIDER_GEMINI, kGeminiChunks, GEMINI_CHUNK_COUNT - 1, "Hello world", 0,
+                 "gemini truncated stream");
+
+    /* Gemini: one JSON object split across two Feed() calls. */
+    check_stream(PROVIDER_GEMINI, kGeminiSplitChunks, GEMINI_SPLIT_CHUNK_COUNT, "Hello world", 1,
+                 "gemini split chunk");
+
+    /* Gemini: bare response array when the server omits alt=sse. */
+    check_stream(PROVIDER_GEMINI, kGeminiArrayChunks, GEMINI_ARRAY_CHUNK_COUNT, "Hello world", 1,
+                 "gemini bare array");
+
+    /* OpenAI wire shape from a host that is not OpenAI. */
+    check_stream(PROVIDER_OPENAI, kOpenAICompatChunks, OPENAI_COMPAT_CHUNK_COUNT, "Hello world", 1,
+                 "openai-compatible host");
 
     /* APIParse_Feed returns the number of bytes appended. */
     test_feed_return_value();

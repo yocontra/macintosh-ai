@@ -50,6 +50,13 @@ extern "C"
 #include "tls_cache.h"
 #include <Threads.h>
 #include <Events.h>
+
+/* Certificate verification is on by default. The application clears it only
+ * when the user asks to talk to a server this build has no trust anchor for. */
+static bool sVerifyPeer = true;
+
+extern "C" void net68k_set_verify_peer(int on) { sVerifyPeer = (on != 0); }
+extern "C" int  net68k_get_verify_peer(void)    { return sVerifyPeer ? 1 : 0; }
 static void (*sYieldHook)() = nullptr;
 /* Every yield also notes the time: when the network lets us go is
    something only this Mac sees (mac_entropy.c). */
@@ -140,7 +147,7 @@ void HttpClient::Get(const Uri& requestUri, function<void(HttpResponse&)> onComp
 	req  = "GET ";
 	req += requestUri.Path;
 	req += " HTTP/1.1\r\nHost: ";
-	req += requestUri.Host;
+	req += requestUri.HostHeader();
 	req += "\r\n";
 	AppendAuthHeader(req); // §8 DEDUP
 	req += "Connection: keep-alive\r\nKeep-Alive: timeout=90, max=100\r\n"
@@ -202,7 +209,7 @@ void HttpClient::PutPost(const Uri& requestUri, const string& method, const stri
 	req += ' ';
 	req += requestUri.Path;
 	req += " HTTP/1.1\r\nHost: ";
-	req += requestUri.Host;
+	req += requestUri.HostHeader();
 	req += "\r\n";
 	AppendAuthHeader(req); // §8 DEDUP
 	req += "Content-Type: application/json\r\n"
@@ -579,6 +586,10 @@ int HttpClient::GetRemotePort(const Uri& uri)
 {
 	if (_proxyHost != "" && _proxyPort > 0)
 		return _proxyPort;
+	/* An explicit port in the URL wins: an OpenAI-compatible server does not
+	 * have to live on 443. */
+	if (uri.Port > 0)
+		return uri.Port;
 	else if(uri.Scheme == "https")
 		return 443;
 	return 80;
@@ -779,6 +790,16 @@ bool HttpClient::SslInitContexts()
 		return false;
 	}
 
+	/* WE2 signs the *.googleapis.com endpoints (Gemini); WE1 signs the
+	 * Cloudflare-fronted API hosts. Both are needed for the provider list. */
+	ret = mbedtls_x509_crt_parse_der(&_cacert, kGoogleWE2_DER, kGoogleWE2_DER_len);
+	if (ret != 0)
+	{
+		_response.ErrorCode = SSLError;
+		_response.ErrorMsg = "mbedtls_x509_crt_parse_der (WE2) returned " + to_string(ret);
+		return false;
+	}
+
 	/* OPT-3: load persistent ECDSA cache from prefs file into memory */
 	uecc_load_persist_ecdsa_cache();
 
@@ -861,7 +882,13 @@ bool HttpClient::SslConfigSetup()
 		return false;
 	}
 
-	mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+	/* Verification is on unless the application turned it off. It is only off
+	 * for servers this build has no anchor for (an arbitrary OpenAI-compatible
+	 * host); the trust store holds WE1 and WE2 and nothing else, so leaving it
+	 * required means "cannot connect", not "connects insecurely". */
+	mbedtls_ssl_conf_authmode(&_conf, sVerifyPeer
+	                                        ? MBEDTLS_SSL_VERIFY_REQUIRED
+	                                        : MBEDTLS_SSL_VERIFY_NONE);
 	mbedtls_ssl_conf_ca_chain(&_conf, &_cacert, NULL);
 	mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_ctr_drbg);
 	mbedtls_ssl_conf_extended_master_secret(&_conf, MBEDTLS_SSL_EXTENDED_MS_DISABLED);

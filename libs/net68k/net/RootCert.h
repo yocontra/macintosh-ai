@@ -30,3 +30,14 @@ extern const size_t        kGlobalSignRootCA_DER_len;
  */
 extern const unsigned char kGoogleWE1_DER[];
 extern const size_t        kGoogleWE1_DER_len;
+
+/*
+ * Google Trust Services WE2 intermediate CA
+ * Subject:  C=US, O=Google Trust Services, CN=WE2
+ * Expires:  Feb 20 14:00:00 2029 GMT
+ *
+ * Trust anchor for *.googleapis.com hosts (Gemini). Same shape as WE1: pinning
+ * the intermediate keeps the P-384 root signature out of the handshake.
+ */
+extern const unsigned char kGoogleWE2_DER[];
+extern const size_t        kGoogleWE2_DER_len;

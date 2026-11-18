@@ -63,7 +63,7 @@ resource 'STR#' (128) {
 
 /* About box (modal) */
 resource 'DLOG' (128) {
-    {60, 60, 250, 470},
+    {50, 60, 270, 470},
     dBoxProc,
     invisible,
     noGoAway,
@@ -75,25 +75,25 @@ resource 'DLOG' (128) {
 
 resource 'DITL' (128) {
     {
-        {150, 155, 170, 225},
+        {158, 324, 178, 390},
         Button { enabled, "OK" };
 
-        {14, 16, 32, 394},
+        {12, 20, 30, 390},
         StaticText { enabled, "Macintosh AI" };
 
-        {36, 16, 52, 394},
+        {32, 20, 48, 390},
         StaticText { enabled, "Version ^0" };
 
-        {64, 16, 80, 394},
+        {54, 20, 70, 390},
         StaticText { enabled, "AI chat for the Macintosh." };
 
-        {84, 16, 100, 394},
+        {78, 20, 94, 390},
         StaticText { enabled, "Requires a 68020 or later, 8 MB of memory," };
 
-        {104, 16, 120, 394},
+        {92, 20, 108, 390},
         StaticText { enabled, "System 7.5.3 or later, and Open Transport 1.3." };
 
-        {128, 16, 144, 394},
+        {118, 20, 134, 390},
         StaticText { enabled, "Set your provider, model and API key in File > Settings." };
     }
 };
@@ -118,7 +118,7 @@ resource 'WIND' (130) {
 
 /* Settings dialog (modal) */
 resource 'DLOG' (140) {
-    {80, 60, 260, 460},
+    {54, 60, 324, 460},
     dBoxProc,
     invisible,
     noGoAway,
@@ -130,35 +130,41 @@ resource 'DLOG' (140) {
 
 resource 'DITL' (140) {
     {
-        {10, 12, 24, 180},
+        {10, 16, 24, 384},
         StaticText { enabled, "^0" };
 
-        {8, 190, 26, 388},
+        {24, 16, 42, 384},
         EditText { enabled, "anthropic" };
 
-        {34, 12, 48, 180},
+        {52, 16, 66, 384},
         StaticText { enabled, "^1" };
 
-        {32, 190, 50, 388},
+        {66, 16, 84, 384},
         EditText { enabled, "claude-sonnet-4-5" };
 
-        {58, 12, 72, 180},
+        {94, 16, 108, 384},
         StaticText { enabled, "^2" };
 
-        {56, 190, 74, 388},
+        {108, 16, 126, 384},
         EditText { enabled, "" };
 
-        {82, 12, 96, 180},
+        {136, 16, 150, 384},
         StaticText { enabled, "^3" };
 
-        {80, 190, 98, 388},
+        {150, 16, 168, 384},
         EditText { enabled, "" };
 
-        {128, 250, 148, 310},
+        {220, 236, 240, 296},
         Button { enabled, "OK" };
 
-        {128, 320, 148, 380},
+        {220, 306, 240, 366},
         Button { enabled, "Cancel" };
+
+        {174, 16, 185, 384},
+        StaticText { enabled, "" };
+
+        {185, 16, 196, 384},
+        StaticText { enabled, "" };
     }
 };
 

@@ -14,6 +14,7 @@ set(APP_VERSION_STR "dev" CACHE STRING "Version string compiled into the applica
 set(SRC_C
     src/main.c
     src/prefs.c
+    src/selftest.c
     src/error.c
     src/ui/menu.c
     src/ui/event.c

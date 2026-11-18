@@ -97,18 +97,10 @@ enum {
     kCtxQuittingApplication  = 11
 };
 
-/* Color constants if not defined */
-#ifndef blackColor
-#define blackColor 33
-#endif
-
-#ifndef whiteColor
-#define whiteColor 30
-#endif
-
-#ifndef blueColor
-#define blueColor 204
-#endif
+/* The QuickDraw colour constants (blackColor, whiteColor, ...) are enum
+ * constants in <Quickdraw.h> reached through <Controls.h>. Defining them as
+ * macros here replaced those enums with plain integers, which broke every
+ * RGBForeColor/ForeColor call that expects a ColorIndex. */
 
 /* Chat UI constants */
 enum {

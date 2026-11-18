@@ -8,6 +8,10 @@
  *              "event: message_stop" / {"type":"message_stop"}
  *   OpenAI     "data: {\"choices\":[{\"delta\":{\"content\":\"..\"}}]}"
  *              "data: [DONE]"
+ *   Gemini     "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"..\"}]}}]}"
+ *              done once candidates[0].finishReason appears (STOP, MAX_TOKENS, ..)
+ *              or a whole response array "[{..},{..}]" arrives on one line
+ *              (the server omits alt=sse)
  *
  * SSE lines can be split across body chunks, so complete lines are only
  * parsed once the terminating '\n' has arrived.  A line longer than the
@@ -20,8 +24,11 @@
 
 #include "gason.hpp"
 
-/* Mirror of APIProvider; api_client.h cannot be included (it needs <Types.h>). */
-enum { kParseAnthropic = 0, kParseOpenAI = 1 };
+/* Mirror of the dialect ids in api_parse.h; api_client.h cannot be included
+   here (it needs <Types.h>). */
+enum { kParseAnthropic = kAPIDialectAnthropic,
+       kParseOpenAI    = kAPIDialectOpenAI,
+       kParseGemini    = kAPIDialectGemini };
 
 #define kLineMax 1024
 
@@ -54,6 +61,56 @@ static short AppendText(APIParse *p, const char *s, int n)
     return (short)n;
 }
 
+/* Gemini: text lives at candidates[0].content.parts[0].text, and the stream is
+   finished once candidates[0].finishReason is present (STOP, MAX_TOKENS, ...).
+   A server reached without alt=sse answers with one whole array of responses
+   on a single line; only the first element carries text and it is the one
+   that also carries the finishReason. */
+static short ParseGemini(APIParse *p, gason::JsonValue root)
+{
+    gason::JsonValue candidates;
+    gason::JsonValue candidate;
+    gason::JsonValue content;
+    gason::JsonValue parts;
+    gason::JsonValue part;
+    const char *text;
+    short appended = 0;
+
+    if (root.isArray()) {
+        root = root.at(0);
+        if (!root.isObject())
+            return 0;
+    }
+    if (!root.isObject())
+        return 0;
+
+    candidates = root("candidates");
+    if (!candidates.isArray())
+        return 0;
+    candidate = candidates.at(0);
+    if (!candidate.isObject())
+        return 0;
+
+    content = candidate("content");
+    if (content.isObject()) {
+        parts = content("parts");
+        if (parts.isArray()) {
+            part = parts.at(0);
+            if (part.isObject()) {
+                text = JsonString(part("text"));
+                if (text)
+                    appended = AppendText(p, text, (int)strlen(text));
+            }
+        }
+    }
+
+    /* Any finishReason value ends the stream; a missing one is JSON null. */
+    if (JsonString(candidate("finishReason")))
+        sDoneMask |= (unsigned char)(1u << kParseGemini);
+
+    return appended;
+}
+
 /* Decode one complete, CR-stripped line.  `line` is writable: gason unescapes
    JSON strings in place. */
 static short ParseLine(APIParse *p, char *line, short len, int provider)
@@ -67,6 +124,8 @@ static short ParseLine(APIParse *p, char *line, short len, int provider)
 
     if (len <= 0 || line[0] == ':')      /* blank line or SSE comment */
         return 0;
+    if (provider < 0 || provider > kParseGemini)
+        return 0;
 
     if (memcmp(line, "event:", 6) == 0) {
         char *v = line + 6;
@@ -75,6 +134,13 @@ static short ParseLine(APIParse *p, char *line, short len, int provider)
         if (provider == kParseAnthropic && strcmp(v, "message_stop") == 0)
             sDoneMask |= (unsigned char)(1u << kParseAnthropic);
         return 0;
+    }
+
+    /* Gemini without alt=sse: the body is one bare JSON array, no data: line. */
+    if (provider == kParseGemini && line[0] == '[') {
+        if (gason::jsonParse(line, root, alloc) != gason::JSON_PARSE_OK)
+            return 0;
+        return ParseGemini(p, root);
     }
 
     if (memcmp(line, "data:", 5) != 0)
@@ -92,6 +158,9 @@ static short ParseLine(APIParse *p, char *line, short len, int provider)
         return 0;
     if (gason::jsonParse(json, root, alloc) != gason::JSON_PARSE_OK)
         return 0;
+
+    if (provider == kParseGemini)
+        return ParseGemini(p, root);
 
     if (provider == kParseAnthropic) {
         type = JsonString(root("type"));
@@ -173,7 +242,7 @@ short APIParse_Feed(APIParse *p, const char *data, short len, int provider)
 
 int APIParse_Done(int provider)
 {
-    if (provider < 0 || provider > 1)
+    if (provider < 0 || provider > kParseGemini)
         return 0;
     return (sDoneMask & (1u << provider)) != 0;
 }

@@ -43,14 +43,20 @@ static HttpClient sHttp;
 static APIState     sState = kAPIStateIdle;
 static APIProvider  sProvider = kProviderAnthropic;
 
-static char sModel[64]   = "";
-static char sKey[128]    = "";
+static char sModel[64]    = "";
+static char sKey[128]     = "";
 static char sBaseURL[128] = "";
 static char sError[128];
 
-static char sURL[192];
-static char sHost[64];
-static char sHeaders[192];
+/* Certificate verification lives in the engine: the pref only seeds it. */
+extern "C" void net68k_set_verify_peer(int on);
+extern "C" int  net68k_get_verify_peer(void);
+
+/* sURL holds "https://" + host[:port] + base path + dialect path; the Gemini
+   path embeds a 63-byte model name, so the old 192 bytes were not enough. */
+static char sURL[384];
+static char sHost[160];       /* host plus ":port" when the port is not 443 */
+static char sHeaders[320];    /* OpenRouter sends three header lines */
 static char sBody[8192];
 
 /* Decoded assistant text for the current request, plus the read cursor.
@@ -91,6 +97,123 @@ static void SetError(const char* msg)
     CopyBounded(sError, (short)sizeof(sError), msg && *msg ? msg : "unknown error");
 }
 
+/* Rewrite the current error as "<provider>: <existing text>". */
+static void PrefixError(const char* name)
+{
+    char tmp[128];
+
+    CopyBounded(tmp, (short)sizeof(tmp), sError);
+    snprintf(sError, sizeof sError, "%s: %s", name, tmp);
+}
+
+static Boolean EqualsCI(const char* s, const char* name)
+{
+    for (; *s && *name; s++, name++) {
+        char a = *s, b = *name;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b)
+            return false;
+    }
+    return *s == '\0' && *name == '\0';
+}
+
+/* Copy `src`, dropping leading and trailing spaces (the Settings field is
+   free text, so " Gemini " has to work). */
+static void CopyTrimmed(char* dst, short cap, const char* src)
+{
+    const char* end;
+    short n;
+
+    if (!src)
+        src = "";
+    while (*src == ' ' || *src == '\t')
+        src++;
+    end = src + strlen(src);
+    while (end > src && (end[-1] == ' ' || end[-1] == '\t'))
+        end--;
+    n = (short)(end - src);
+    if (n > cap - 1)
+        n = (short)(cap - 1);
+    memcpy(dst, src, (size_t)n);
+    dst[n] = '\0';
+}
+
+/* ── Provider table ──────────────────────────────────────────────────
+   One row per APIProvider value.  `usesOpenAIDialect` covers openai,
+   openrouter and compatible; those three differ only in default base URL,
+   auth header spelling and whether extra headers are sent. */
+typedef struct {
+    const char* name;
+    const char* defaultBase;
+    const char* defaultModel;
+    Boolean     usesOpenAIDialect;
+    Boolean     usesGeminiDialect;
+} ProviderInfo;
+
+static const ProviderInfo kProviders[] = {
+    { "anthropic",  "https://api.anthropic.com",                 "claude-sonnet-4-5",           false, false },
+    { "openai",     "https://api.openai.com",                    "gpt-4o-mini",                 true,  false },
+    { "gemini",     "https://generativelanguage.googleapis.com", "gemini-2.0-flash",            false, true  },
+    { "openrouter", "https://openrouter.ai/api",                 "anthropic/claude-sonnet-4.5", true,  false },
+    { "compatible", "",                                           "",                            true,  false }
+};
+
+#define kProviderCount ((short)(sizeof(kProviders) / sizeof(kProviders[0])))
+
+static const ProviderInfo* ProviderInfoFor(APIProvider p)
+{
+    unsigned int i = (unsigned int)p;
+
+    return (i < (unsigned int)kProviderCount) ? &kProviders[i] : &kProviders[0];
+}
+
+static const char* CurrentProviderName(void)
+{
+    return ProviderInfoFor(sProvider)->name;
+}
+
+const char* API_ProviderName(APIProvider p)
+{
+    return ProviderInfoFor(p)->name;
+}
+
+Boolean API_ProviderFromName(const char* name, APIProvider* out)
+{
+    char tmp[24];
+    short i;
+
+    if (!name || !out)
+        return false;
+    CopyTrimmed(tmp, (short)sizeof(tmp), name);
+    for (i = 0; i < kProviderCount; i++) {
+        if (EqualsCI(tmp, kProviders[i].name)) {
+            *out = (APIProvider)i;
+            return true;
+        }
+    }
+    if (EqualsCI(tmp, "openai-compatible")) {
+        *out = kProviderCompatible;
+        return true;
+    }
+    return false;
+}
+
+/* True when `m` is one of the table's default model names (the empty string
+   counts when it was the compatible provider's default). */
+static Boolean IsBuiltInDefaultModel(const char* m)
+{
+    short i;
+
+    if (!m || !*m)
+        return true;
+    for (i = 0; i < kProviderCount; i++) {
+        if (kProviders[i].defaultModel[0] && strcmp(m, kProviders[i].defaultModel) == 0)
+            return true;
+    }
+    return false;
+}
+
 static Boolean IsTlsFailure(const char* msg)
 {
     if (!msg || !*msg)
@@ -105,7 +228,8 @@ static Boolean IsTlsFailure(const char* msg)
 static void SetEngineError(const char* msg, const char* fallback)
 {
     if (IsTlsFailure(msg)) {
-        SetError("TLS: certificate not trusted");
+        snprintf(sError, sizeof sError, "%s: TLS: certificate not trusted",
+                 CurrentProviderName());
         return;
     }
     if (msg && *msg) {
@@ -120,13 +244,16 @@ static void SetEngineError(const char* msg, const char* fallback)
 static void SetHttpError(unsigned int status)
 {
     if (status == 401 || status == 403)
-        SetError("API key rejected - check Settings");
+        snprintf(sError, sizeof sError, "%s: API key rejected - check Settings",
+                 CurrentProviderName());
     else if (status == 429)
-        SetError("rate limited by the provider");
+        snprintf(sError, sizeof sError, "%s: rate limited by the provider",
+                 CurrentProviderName());
     else if (status >= 500)
-        SetError("provider server error");
+        snprintf(sError, sizeof sError, "%s: provider server error",
+                 CurrentProviderName());
     else
-        snprintf(sError, sizeof sError, "HTTP %u", status);
+        snprintf(sError, sizeof sError, "%s: HTTP %u", CurrentProviderName(), status);
 }
 
 /* ── Request body ────────────────────────────────────────────────── */
@@ -215,17 +342,27 @@ static Boolean IsWelcomeMessage(const char* text)
 
 static Boolean BuildBody(void)
 {
+    const ProviderInfo* pi = ProviderInfoFor(sProvider);
     int n = 0;
     int cap = (int)sizeof(sBody);
     int count, i, first = 1;
+    Boolean gemini = pi->usesGeminiDialect;
 
     sBody[0] = '\0';
-    n = AppendRaw(n, "{\"model\":\"");
-    n = AppendEscapedJSON(n, sModel, cap - 96);
-    n = AppendRaw(n, "\"");
-    if (sProvider == kProviderAnthropic)
-        n = AppendRaw(n, ",\"max_tokens\":1024");
-    n = AppendRaw(n, ",\"stream\":true,\"messages\":[");
+
+    if (gemini) {
+        /* Gemini has no model field, no stream flag and no max_tokens in the
+           body: the model is part of the URL and SSE is requested with
+           alt=sse.  Assistant turns are "model". */
+        n = AppendRaw(n, "{\"contents\":[");
+    } else {
+        n = AppendRaw(n, "{\"model\":\"");
+        n = AppendEscapedJSON(n, sModel, cap - 96);
+        n = AppendRaw(n, "\"");
+        if (!pi->usesOpenAIDialect)
+            n = AppendRaw(n, ",\"max_tokens\":1024");
+        n = AppendRaw(n, ",\"stream\":true,\"messages\":[");
+    }
 
     count = gConversationHistory.count;
     if (count > kMaxConversationHistory)
@@ -241,11 +378,19 @@ static Boolean BuildBody(void)
         if (n > cap - 64)
             break;
 
-        n = AppendRaw(n, first ? "{\"role\":\"" : ",{\"role\":\"");
-        n = AppendRaw(n, m->type == kUserMessage ? "user" : "assistant");
-        n = AppendRaw(n, "\",\"content\":\"");
-        n = AppendEscapedJSON(n, m->text, cap - 16);
-        n = AppendRaw(n, "\"}");
+        if (gemini) {
+            n = AppendRaw(n, first ? "{\"role\":\"" : ",{\"role\":\"");
+            n = AppendRaw(n, m->type == kUserMessage ? "user" : "model");
+            n = AppendRaw(n, "\",\"parts\":[{\"text\":\"");
+            n = AppendEscapedJSON(n, m->text, cap - 32);
+            n = AppendRaw(n, "\"}]}");
+        } else {
+            n = AppendRaw(n, first ? "{\"role\":\"" : ",{\"role\":\"");
+            n = AppendRaw(n, m->type == kUserMessage ? "user" : "assistant");
+            n = AppendRaw(n, "\",\"content\":\"");
+            n = AppendEscapedJSON(n, m->text, cap - 16);
+            n = AppendRaw(n, "\"}");
+        }
         first = 0;
     }
 
@@ -255,67 +400,221 @@ static Boolean BuildBody(void)
     return true;
 }
 
-static Boolean BuildURL(void)
-{
-    static const char* kAnthropicBase = "https://api.anthropic.com";
-    static const char* kOpenAIBase = "https://api.openai.com";
-    const char* base = sBaseURL[0] ? sBaseURL : (sProvider == kProviderOpenAI ? kOpenAIBase : kAnthropicBase);
-    const char* path = (sProvider == kProviderOpenAI) ? "/v1/chat/completions" : "/v1/messages";
-    const char* h;
-    int n, hn = 0;
+/* Parsed https base URL: host (no port), optional port, and a path with no
+   leading scheme and no trailing slash. */
+typedef struct {
+    char           host[128];
+    unsigned short port;
+    char           path[128];
+} ParsedBase;
 
-    if (!StartsWithCI(base, "https://")) {
+static Boolean IsHostChar(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_';
+}
+
+/* Accepts https://host[:port][/path].  Everything is validated here, once,
+   before the string is assembled or handed to the engine. */
+static Boolean ParseBaseURL(const char* base, ParsedBase* out)
+{
+    const char* p;
+    int hn = 0;
+    unsigned long port = 0;
+
+    out->host[0] = '\0';
+    out->path[0] = '\0';
+    out->port = 443;
+
+    if (!base || !StartsWithCI(base, "https://")) {
         SetError("only https:// endpoints are supported");
         return false;
     }
-    base += 8;   /* skip the scheme; it is written out lowercase below */
+    p = base + 8;
 
-    n = (int)strlen(base);
-    if (n >= (int)sizeof(sURL) - 32) {
-        SetError("base URL too long");
-        return false;
-    }
-
-    /* The engine only ever connects to 443 for https (Uri carries no port),
-       so an explicit other port would silently go to the wrong place. */
-    h = base;
-    while (*h && *h != '/' && *h != ':')
-        h++;
-    if (*h == ':') {
-        const char* p = h + 1;
-        if (!(p[0] == '4' && p[1] == '4' && p[2] == '3' && (p[3] == '/' || p[3] == '\0'))) {
-            SetError("only port 443 is supported");
+    while (*p && *p != ':' && *p != '/') {
+        if (!IsHostChar(*p)) {
+            SetError("invalid host in base URL");
             return false;
         }
-    }
-
-    strcpy(sURL, "https://");
-    strcat(sURL, base);
-    n = (int)strlen(sURL);
-    while (n > 8 && sURL[n - 1] == '/')
-        sURL[--n] = '\0';
-    strcat(sURL, path);
-
-    h = sURL + 8;
-    while (*h && *h != '/' && *h != ':') {
-        if (hn >= (int)sizeof(sHost) - 1) {
+        if (hn >= (int)sizeof(out->host) - 1) {
             SetError("host name too long");
             return false;
         }
-        sHost[hn++] = *h++;
+        out->host[hn++] = *p++;
     }
-    sHost[hn] = '\0';
     if (hn == 0) {
         SetError("base URL has no host");
         return false;
+    }
+    if (out->host[0] == '.' || strstr(out->host, "..") != NULL) {
+        SetError("invalid host in base URL");
+        return false;
+    }
+    out->host[hn] = '\0';
+
+    if (*p == ':') {
+        p++;
+        if (*p < '0' || *p > '9') {
+            SetError("invalid port in base URL");
+            return false;
+        }
+        while (*p >= '0' && *p <= '9') {
+            port = port * 10 + (unsigned long)(*p - '0');
+            if (port > 65535) {
+                SetError("port out of range in base URL");
+                return false;
+            }
+            p++;
+        }
+        if (port == 0) {
+            SetError("invalid port in base URL");
+            return false;
+        }
+        out->port = (unsigned short)port;
+    }
+
+    if (*p == '/') {
+        int pn = 0;
+        while (*p && *p != '?' && *p != '#') {
+            if (*p < 0x21 || *p > 0x7e) {
+                SetError("invalid character in base URL path");
+                return false;
+            }
+            if (pn >= (int)sizeof(out->path) - 1) {
+                SetError("base URL path too long");
+                return false;
+            }
+            out->path[pn++] = *p++;
+        }
+        if (*p == '?' || *p == '#') {
+            SetError("base URL must not have a query or fragment");
+            return false;
+        }
+        out->path[pn] = '\0';
+        while (pn > 0 && out->path[pn - 1] == '/')
+            out->path[--pn] = '\0';
+    } else if (*p != '\0') {
+        SetError("invalid base URL");
+        return false;
+    }
+
+    return true;
+}
+
+static Boolean EndsWith(const char* s, const char* suffix)
+{
+    size_t n = strlen(s), m = strlen(suffix);
+
+    return n >= m && strcmp(s + n - m, suffix) == 0;
+}
+
+static int AppendURL(int n, const char* s)
+{
+    int cap = (int)sizeof(sURL);
+
+    while (*s && n < cap - 1)
+        sURL[n++] = *s++;
+    sURL[n] = '\0';
+    return n;
+}
+
+/* Build the full request URL and the host passed to HttpClient::WarmUp.
+   The base path is honoured: a path ending in /v1 (or /v1beta) does not get
+   a second copy of that segment. */
+static Boolean BuildURL(void)
+{
+    static ParsedBase u;
+    const ProviderInfo* pi = ProviderInfoFor(sProvider);
+    const char* configured = sBaseURL[0] ? sBaseURL : pi->defaultBase;
+    char base[128];
+    char tail[160];
+    char portText[8];
+    int need, n;
+
+    CopyTrimmed(base, (short)sizeof(base), configured);
+    if (!base[0]) {
+        snprintf(sError, sizeof sError,
+                 "%s provider needs a base URL - use File > Settings...", pi->name);
+        return false;
+    }
+    if (!ParseBaseURL(base, &u)) {
+        PrefixError(pi->name);
+        return false;
+    }
+
+    if (pi->usesGeminiDialect) {
+        const char* c;
+
+        if (!sModel[0]) {
+            snprintf(sError, sizeof sError,
+                     "%s provider needs a model - use File > Settings...", pi->name);
+            return false;
+        }
+        /* The model is a path segment here, so keep it to characters that
+           are legal unencoded. */
+        for (c = sModel; *c; c++) {
+            if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' || *c == '_')) {
+                snprintf(sError, sizeof sError,
+                         "%s: model name has invalid characters", pi->name);
+                return false;
+            }
+        }
+        snprintf(tail, sizeof tail, "%s%s:streamGenerateContent?alt=sse",
+                 EndsWith(u.path, "/v1beta") ? "models/" : "v1beta/models/", sModel);
+    } else if (pi->usesOpenAIDialect) {
+        snprintf(tail, sizeof tail, "%s",
+                 EndsWith(u.path, "/v1") ? "chat/completions" : "v1/chat/completions");
+    } else {
+        snprintf(tail, sizeof tail, "%s",
+                 EndsWith(u.path, "/v1") ? "messages" : "v1/messages");
+    }
+
+    need = 8 + (int)strlen(u.host) + (u.port != 443 ? 6 : 0) +
+           (int)strlen(u.path) + 1 + (int)strlen(tail);
+    if (need >= (int)sizeof(sURL)) {
+        SetError("base URL too long");
+        PrefixError(pi->name);
+        return false;
+    }
+
+    n = AppendURL(0, "https://");
+    n = AppendURL(n, u.host);
+    if (u.port != 443) {
+        snprintf(portText, sizeof portText, ":%u", (unsigned)u.port);
+        n = AppendURL(n, portText);
+    }
+    n = AppendURL(n, u.path);
+    n = AppendURL(n, "/");
+    n = AppendURL(n, tail);
+
+    /* WarmUp takes one host string and parses it as "https://<host>", so the
+       port has to be in it: Uri::Port then drives the warm-up dial and the
+       POST reuses that same connection. */
+    CopyBounded(sHost, (short)sizeof(sHost), u.host);
+    if (u.port != 443) {
+        int hl = (int)strlen(sHost);
+        snprintf(sHost + hl, sizeof(sHost) - (size_t)hl, ":%u", (unsigned)u.port);
     }
     return true;
 }
 
 /* ── Engine callbacks ────────────────────────────────────────────── */
+/* The decoder ids are api_parse.h's kAPIDialect* values; openrouter and
+   compatible share the OpenAI wire format. */
+static int ParseDialect(void)
+{
+    if (sProvider == kProviderAnthropic)
+        return kAPIDialectAnthropic;
+    if (sProvider == kProviderGemini)
+        return kAPIDialectGemini;
+    return kAPIDialectOpenAI;
+}
+
 static void OnChunk(const char* at, int len)
 {
-    APIParse_Feed(&sParse, at, (short)len, (int)sProvider);
+    APIParse_Feed(&sParse, at, (short)len, ParseDialect());
 }
 
 static void OnComplete(HttpResponse& r)
@@ -335,13 +634,26 @@ static void OnComplete(HttpResponse& r)
 /* ── Public API ──────────────────────────────────────────────────── */
 void API_Init(void)
 {
+    const char* v;
+    APIProvider p = kProviderAnthropic;
+
     Prefs_Load();
 
-    sProvider = StartsWithCI(Prefs_Get("provider", "anthropic"), "openai")
-                    ? kProviderOpenAI : kProviderAnthropic;
-    CopyBounded(sModel, (short)sizeof(sModel), Prefs_Get("model", "claude-sonnet-4-5"));
+    if (!API_ProviderFromName(Prefs_Get("provider", "anthropic"), &p))
+        p = kProviderAnthropic;
+    sProvider = p;
+
+    /* An absent or empty model pref means "this provider's default"; a model
+       the user typed is never replaced. */
+    v = Prefs_Get("model", "");
+    CopyBounded(sModel, (short)sizeof(sModel),
+                (v && *v) ? v : ProviderInfoFor(sProvider)->defaultModel);
     CopyBounded(sKey, (short)sizeof(sKey), Prefs_Get("api_key", ""));
     CopyBounded(sBaseURL, (short)sizeof(sBaseURL), Prefs_Get("base_url", ""));
+
+    v = Prefs_Get("tls_verify", "1");
+    net68k_set_verify_peer((EqualsCI(v, "0") || EqualsCI(v, "false") ||
+                            EqualsCI(v, "no") || EqualsCI(v, "off")) ? 0 : 1);
 
     sState = kAPIStateIdle;
     sError[0] = '\0';
@@ -357,6 +669,8 @@ void API_Shutdown(void)
 
 Boolean API_BeginRequest(void)
 {
+    const ProviderInfo* pi = ProviderInfoFor(sProvider);
+
     if (sState == kAPIStateConnecting || sState == kAPIStateStreaming) {
         SetError("a request is already in progress");
         return false;
@@ -364,15 +678,17 @@ Boolean API_BeginRequest(void)
     sError[0] = '\0';
 
     if (!sKey[0]) {
-        SetError("no API key - use File > Settings...");
+        snprintf(sError, sizeof sError, "%s: no API key - use File > Settings...",
+                 pi->name);
+        return false;
+    }
+    if (!sModel[0]) {
+        snprintf(sError, sizeof sError,
+                 "%s provider needs a model - use File > Settings...", pi->name);
         return false;
     }
     if (!BuildURL())
         return false;
-    if (!sModel[0]) {
-        SetError("no model configured - use File > Settings...");
-        return false;
-    }
     if (!BuildBody()) {
         SetError("prompt too long");
         return false;
@@ -385,12 +701,22 @@ Boolean API_BeginRequest(void)
     sFailed = 0;
     sCancelled = 0;
 
-    if (sProvider == kProviderOpenAI) {
+    if (sProvider == kProviderAnthropic) {
+        sHttp.SetAuthorization(sKey);      /* engine emits "x-api-key: <key>" */
+        CopyBounded(sHeaders, (short)sizeof(sHeaders),
+                    "anthropic-version: 2023-06-01\r\n");
+    } else if (sProvider == kProviderGemini) {
+        sHttp.SetAuthorization("");
+        snprintf(sHeaders, sizeof sHeaders, "x-goog-api-key: %s\r\n", sKey);
+    } else if (sProvider == kProviderOpenRouter) {
+        sHttp.SetAuthorization("");
+        snprintf(sHeaders, sizeof sHeaders,
+                 "Authorization: Bearer %s\r\n"
+                 "HTTP-Referer: https://github.com/yocontra/macintosh-ai\r\n"
+                 "X-Title: Macintosh AI\r\n", sKey);
+    } else {
         sHttp.SetAuthorization("");
         snprintf(sHeaders, sizeof sHeaders, "Authorization: Bearer %s\r\n", sKey);
-    } else {
-        sHttp.SetAuthorization(sKey);      /* engine emits "x-api-key: <key>" */
-        strcpy(sHeaders, "anthropic-version: 2023-06-01\r\n");
     }
     sHttp.SetExtraHeaders(sHeaders);
 
@@ -399,7 +725,8 @@ Boolean API_BeginRequest(void)
     /* Open the connection now (TCP + TLS handshake, cooperative); the POST is
        issued from API_Poll so this call does one job only. */
     if (!sHttp.WarmUp(sHost)) {
-        SetError("connection failed (network or TLS)");
+        snprintf(sError, sizeof sError, "%s: connection failed (network or TLS)",
+                 pi->name);
         sState = kAPIStateError;
         return false;
     }
@@ -420,7 +747,8 @@ short API_Poll(char* out, short outMax)
         sFinished = 1;
         if (!sCompleted && !sCancelled) {
             sFailed = 1;
-            SetError("connection failed (network or TLS)");
+            snprintf(sError, sizeof sError,
+                     "%s: connection failed (network or TLS)", CurrentProviderName());
         }
     }
 
@@ -474,11 +802,24 @@ APIProvider API_GetProvider(void) { return sProvider; }
 
 void API_SetProvider(APIProvider p)
 {
-    APIProvider next = (p == kProviderOpenAI) ? kProviderOpenAI : kProviderAnthropic;
-    if (next == sProvider)
+    const ProviderInfo* pi;
+    unsigned int idx = (unsigned int)p;
+
+    if (idx >= (unsigned int)kProviderCount)
         return;
-    sProvider = next;
-    Prefs_Set("provider", sProvider == kProviderOpenAI ? "openai" : "anthropic");
+    if (p == sProvider)
+        return;
+
+    pi = &kProviders[idx];
+    sProvider = p;
+    Prefs_Set("provider", pi->name);
+
+    /* Follow the new provider's default model when the current model is one
+       of the built-in defaults (or empty).  A model the user typed is kept. */
+    if (!sModel[0] || IsBuiltInDefaultModel(sModel)) {
+        CopyBounded(sModel, (short)sizeof(sModel), pi->defaultModel);
+        Prefs_Set("model", sModel);
+    }
     Prefs_Save();
 }
 
@@ -519,4 +860,68 @@ void API_SetBaseURL(const char* u)
     strcpy(sBaseURL, tmp);
     Prefs_Set("base_url", sBaseURL);
     Prefs_Save();
+}
+
+Boolean API_GetCertificateCheck(void)
+{
+    return net68k_get_verify_peer() ? true : false;
+}
+
+void API_SetCertificateCheck(Boolean on)
+{
+    Boolean next = on ? true : false;
+
+    net68k_set_verify_peer(next ? 1 : 0);
+    /* The authmode is read when the mbedTLS config is built, so drop the
+       cached TLS context (never mid-request) to make the change take effect
+       on the next connect.  The session ticket is preserved by SslFreeAll. */
+    if (sState != kAPIStateConnecting && sState != kAPIStateStreaming)
+        sHttp.SslFreeAll();
+    Prefs_Set("tls_verify", next ? "1" : "0");
+    Prefs_Save();
+}
+
+/* One line for the chat window header: what is actually answering.  The
+   middle dot is MacRoman 0xE1, which QuickDraw renders as U+00B7.  The
+   header strip is narrow, so the line is capped at 45 bytes even when the
+   caller's buffer is larger. */
+static void SetStatusLine(char* out, short max, const char* text)
+{
+    short cap = max;
+
+    if (cap > 46)
+        cap = 46;              /* 45 visible bytes + NUL */
+    CopyBounded(out, cap, text);
+}
+
+void API_GetStatusText(char* out, short max)
+{
+    char tmp[96];
+
+    if (!out || max <= 0)
+        return;
+
+    if (gActiveAIModel == kMarkovModel) {
+        SetStatusLine(out, max, "Markov chain");
+        return;
+    }
+    if (gActiveAIModel == kTemplateModel) {
+        SetStatusLine(out, max, "Template model");
+        return;
+    }
+
+    if (!sKey[0]) {
+        SetStatusLine(out, max, "Remote AI \xE1 no API key");
+        return;
+    }
+    if (!net68k_get_verify_peer()) {
+        SetStatusLine(out, max, "Remote AI \xE1 TLS: no cert check");
+        return;
+    }
+    if (!sModel[0]) {
+        SetStatusLine(out, max, "Remote AI \xE1 no model");
+        return;
+    }
+    snprintf(tmp, sizeof tmp, "Remote AI \xE1 %s", sModel);
+    SetStatusLine(out, max, tmp);
 }

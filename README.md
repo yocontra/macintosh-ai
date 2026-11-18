@@ -1,8 +1,9 @@
 # Macintosh AI
 
-An AI chat client for a 68k Classic Macintosh. It talks to Anthropic or OpenAI
-over HTTPS directly from System 7 — no bridge machine, no proxy — and falls
-back to two offline models when there is no network.
+An AI chat client for a 68k Classic Macintosh. It talks to Anthropic, OpenAI,
+Gemini, OpenRouter or any OpenAI-compatible endpoint over HTTPS directly from
+System 7 — no bridge machine, no proxy — and falls back to two offline models
+when there is no network.
 
 ## What works
 
@@ -11,13 +12,14 @@ back to two offline models when there is no network.
   [Claude 68](https://github.com/SLKK-design/Claude68)). Tokens are decoded as
   they arrive from the Server-Sent Events stream and appear in the chat window
   as they are produced, so the UI never blocks on the network.
-- **Two providers.** Anthropic (`POST /v1/messages`) and OpenAI
-  (`POST /v1/chat/completions`, any OpenAI-compatible base URL that presents a
-  Google Trust Services WE1 certificate).
+- **Five providers.** Anthropic, OpenAI, Gemini, OpenRouter and any
+  OpenAI-compatible endpoint; the exact URL and auth header for each are in
+  [Providers](#providers).
 - **Offline fallbacks.** A Markov chain and a template/pattern model still run
   with no network at all. Pick one from the **Models** menu.
 - **Settings that persist.** File ▸ Settings… stores provider, model, API key
-  and base URL in `MacintoshAI Prefs` in the Preferences folder.
+  and base URL in `MacintoshAI Prefs` in the Preferences folder; the
+  `tls_verify` setting lives in the same file.
 
 ## Requirements
 
@@ -111,12 +113,45 @@ Remote AI uses the configured provider, Markov and Template work offline.
 
 **File ▸ Settings…** (⌘,) opens the settings dialog:
 
-- **Provider** — `anthropic` or `openai`, case-insensitive.
-- **Model** — e.g. `claude-sonnet-4-5` or `gpt-4o-mini`.
+- **Provider** — one of `anthropic`, `openai`, `gemini`, `openrouter`,
+  `compatible`, case-insensitive. See [Providers](#providers) for defaults.
+- **Model** — e.g. `claude-sonnet-4-5`, `gpt-4o-mini`, `gemini-2.0-flash`.
+  Empty means the selected provider's default model.
 - **API key** — paste it with the keyboard; nothing is echoed beyond the field.
-- **Base URL** — leave empty for the provider default. Only `https://` URLs are
-  accepted. A host outside the Google Trust Services chain will fail
-  certificate verification, because that is the only trust anchor compiled in.
+- **Base URL** — leave empty for the provider default. Accepts
+  `https://host[:port][/path]`; only `https://` URLs are accepted. The path is
+  joined with the provider's endpoint path, so `https://gateway.example/v1`
+  becomes `https://gateway.example/v1/chat/completions` rather than a doubled
+  `/v1`. `compatible` requires a base URL and a model.
+
+## Providers
+
+The `provider` pref (and the Settings field) selects one of these; the value is
+also the name written to `MacintoshAI Prefs`.
+
+| `provider` | Dialect | Endpoint it posts to | Auth | Default model |
+|---|---|---|---|---|
+| `anthropic` | Anthropic Messages | `POST https://api.anthropic.com/v1/messages` | `x-api-key` plus `anthropic-version: 2023-06-01` | `claude-sonnet-4-5` |
+| `openai` | OpenAI chat completions | `POST https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` | `gpt-4o-mini` |
+| `gemini` | Gemini streams | `POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse` | `x-goog-api-key` | `gemini-2.0-flash` |
+| `openrouter` | OpenAI chat completions | `POST https://openrouter.ai/api/v1/chat/completions` | `Authorization: Bearer`, plus `HTTP-Referer` and `X-Title` | `anthropic/claude-sonnet-4.5` |
+| `compatible` | OpenAI chat completions | `POST {base}/v1/chat/completions` | `Authorization: Bearer` | none — a model must be entered |
+
+Anthropic sends `{"model","max_tokens":1024,"stream":true,"messages":[…]}`.
+The OpenAI-dialect providers send `{"model","stream":true,"messages":[…]}`.
+Gemini sends `{"contents":[{"role":"user"|"model","parts":[{"text":…}]}]}` and
+puts the model in the URL. Assistant turns are mapped to `assistant` or, for
+Gemini, `model`.
+
+**Certificate verification is pinned to two Google Trust Services
+intermediates.** WE1 covers `api.anthropic.com`, `api.openai.com` and
+`openrouter.ai`; WE2 covers `*.googleapis.com`, so `gemini` verifies too.
+Arbitrary `compatible` servers present chains that include neither, so they
+fail closed with `<provider>: TLS: certificate not trusted` until their anchor
+is added to the engine. Setting `tls_verify=0` in `MacintoshAI Prefs` makes the
+app trust **any** certificate — the Settings dialog does not expose the switch,
+so this is a hand edit; only do it on a network you control. The status strip
+then reads `Remote AI · TLS: no cert check`.
 
 ## Security limitations
 
@@ -125,17 +160,21 @@ Read these before putting a real key in:
 - **The API key is stored in plain text** in `MacintoshAI Prefs` on the Mac.
   Without the Keychain there is nothing better available on System 7; treat the
   machine as holding the secret.
-- **The trust anchor is the Google Trust Services WE1 intermediate**, pinned
-  directly (computing the P-384 root signature does not fit in the handshake
-  budget). `api.anthropic.com` and `api.openai.com` chain through it today, but
-  the pinned certificate **expires 2029-02-20**. After that date the app cannot
-  connect until the anchor is replaced with a new build.
+- **The trust anchors are the Google Trust Services WE1 and WE2
+  intermediates**, pinned directly (computing the P-384 root signature does not
+  fit in the handshake budget). WE1 covers `api.anthropic.com`,
+  `api.openai.com` and `openrouter.ai`; WE2 covers `*.googleapis.com`
+  (`gemini`). The pinned certificates **expire 2029-02-20**; after that date
+  the app cannot connect until the anchors are replaced with a new build.
 - **Certificate dates are not checked** (`MBEDTLS_HAVE_TIME_DATE` is off) and
-  there is **no revocation checking**. The pinned anchor limits the blast
-  radius, but an expired WE1 certificate would still be accepted before its
+  there is **no revocation checking**. The pinned anchors limit the blast
+  radius, but an expired intermediate would still be accepted before its
   removal, and a revoked one would too.
-- A custom `base_url` must present a certificate chaining to WE1; anything else
-  fails closed with "TLS: certificate not trusted".
+- **Other `compatible` hosts are not covered by either anchor.** Their chains
+  do not include WE1 or WE2, so they fail closed with
+  `<provider>: TLS: certificate not trusted` until their anchor is added to the
+  engine. `tls_verify=0` disables verification for those endpoints, at the cost
+  of trusting any certificate on the path.
 
 ## Repository layout
 

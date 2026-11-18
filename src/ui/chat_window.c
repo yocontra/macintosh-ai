@@ -18,6 +18,26 @@
 #include "chat_window.h"
 #include "utils.h"
 
+/* Chat layout, window-local pixels. This is the only place these numbers live. */
+enum {
+    kChatEdge        = 12, /* window edge to the chrome blocks */
+    kChatHeaderH     = 20, /* header strip height */
+    kChatGap         = 8,  /* between logical blocks */
+    kChatTextPadX    = 8,  /* transcript text inset inside its well */
+    kChatTextPadY    = 6,
+    kChatScrollW     = 16, /* scrollbar width */
+    kChatScrollInset = 4,  /* scrollbar inset inside the well */
+    kChatInputH      = 44, /* input well height */
+    kChatLabelColumn = 56, /* "Message:" column left of the input well */
+    kChatRuleOffset  = 6,  /* input top to the rule above it */
+    kChatFieldPadX   = 5,  /* text inset inside the input well */
+    kChatFieldPadY   = 4,
+    kChatBodySize    = 9,  /* Monaco: transcript and input */
+    kChatLabelSize   = 9,  /* Geneva: header, status, "Message:" */
+    kChatHeaderBase  = 6,  /* header bottom to the text baseline */
+    kChatLabelBase   = 13  /* input top to the "Message:" baseline */
+};
+
 /* Module variables */
 static WindowRef sWindow    = NULL;
 static Boolean sInitialized = false;
@@ -51,6 +71,11 @@ static void AppendDisplayText(const char *text, short len);
 static void CancelResponse(void);
 static void DrawChatInput(void);
 static void ClearChatInput(void);
+static void Chat_HeaderRect(Rect *out);
+static void Chat_StatusText(char *out, short max);
+static void DrawInsetWell(const Rect *bounds);
+static void DrawChatHeader(void);
+static void DrawChatRule(void);
 static pascal void ScrollAction(ControlHandle control, short part);
 
 /* Initialize and create the chat window */
@@ -98,23 +123,41 @@ Boolean ChatWindow_Initialize(void)
     /* Setup main content area (whole window) */
     sContentRect = sWindow->portRect;
 
-    /* Setup input area at bottom */
-    SetRect(&sInputRect, kPromptMargin, sContentRect.bottom - kChatInputHeight - kPromptMargin,
-            sContentRect.right - kPromptMargin, sContentRect.bottom - kPromptMargin);
+    /* Input well at the bottom, with a short label column to its left */
+    SetRect(&sInputRect, sContentRect.left + kChatEdge + kChatLabelColumn,
+            sContentRect.bottom - kChatEdge - kChatInputH, sContentRect.right - kChatEdge,
+            sContentRect.bottom - kChatEdge);
 
-    /* Setup scrollbar */
-    SetRect(&scrollBarRect, sContentRect.right - kResponseMargin - 16, kResponseMargin,
-            sContentRect.right - kResponseMargin, sInputRect.top - kResponseMargin - 15);
+    /* Transcript well: below the header strip, above the rule over the input */
+    {
+        Rect headerRect;
+        short ruleY, wellBottom;
 
-    /* Setup display area */
-    SetRect(&sDisplayRect, kResponseMargin, kResponseMargin,
-            sContentRect.right - kResponseMargin - 16, sInputRect.top - kResponseMargin - 15);
+        Chat_HeaderRect(&headerRect);
+        ruleY      = sInputRect.top - kChatRuleOffset;
+        wellBottom = ruleY - kChatGap;
 
-    /* Create the text display area */
-    viewRect = sDisplayRect;
-    destRect = sDisplayRect;
-    InsetRect(&viewRect, 4, 4);
-    InsetRect(&destRect, 4, 4);
+        SetRect(&sDisplayRect, sContentRect.left + kChatEdge, headerRect.bottom + kChatGap,
+                sContentRect.right - kChatEdge, wellBottom);
+    }
+
+    /* Scrollbar sits inside the well, not glued to its frame */
+    SetRect(&scrollBarRect, sDisplayRect.right - kChatScrollInset - kChatScrollW,
+            sDisplayRect.top + kChatScrollInset, sDisplayRect.right - kChatScrollInset,
+            sDisplayRect.bottom - kChatScrollInset);
+
+    /* Text lives inside the well with real padding */
+    viewRect.left   = sDisplayRect.left + kChatTextPadX;
+    viewRect.top    = sDisplayRect.top + kChatTextPadY;
+    viewRect.right  = scrollBarRect.left - kChatTextPadX;
+    viewRect.bottom = sDisplayRect.bottom - kChatTextPadY;
+    destRect        = viewRect;
+
+    /* TENew copies the port's text state into the record, so set Monaco 9
+       before creating either field; that also gives the right line height. */
+    TextFont(kFontMonaco);
+    TextSize(kChatBodySize);
+    TextFace(normal);
 
     /* Create text display with shared utility function */
     sDisplayTE = CreateStandardTextField(&viewRect, &destRect, false);
@@ -133,8 +176,14 @@ Boolean ChatWindow_Initialize(void)
         HandleError(kErrControlCreation, kCtxCreatingResponseArea, false);
     }
 
-    /* Create chat input text field */
-    sInputTE = CreateStandardTextField(&sInputRect, &sInputRect, true);
+    /* Create chat input text field, padded inside its well */
+    viewRect.left   = sInputRect.left + kChatFieldPadX;
+    viewRect.top    = sInputRect.top + kChatFieldPadY;
+    viewRect.right  = sInputRect.right - kChatFieldPadX;
+    viewRect.bottom = sInputRect.bottom - kChatFieldPadY;
+    destRect        = viewRect;
+
+    sInputTE = CreateStandardTextField(&viewRect, &destRect, true);
     if (sInputTE == NULL) {
         HandleError(kErrTextEditCreation, kCtxCreatingPromptArea, false);
         TEDispose(sDisplayTE);
@@ -147,9 +196,6 @@ Boolean ChatWindow_Initialize(void)
         sScrollBar = NULL;
         return false;
     }
-
-    /* Set standard text formatting */
-    ApplyTextFormatting(kFontGeneva, 12, normal);
 
     /* Update scrollbar to reflect empty text and make sure it has the right state */
     UpdateTextScrollbar(sDisplayTE, sScrollBar, true);
@@ -264,76 +310,204 @@ static pascal void ScrollAction(ControlHandle control, short part)
     }
 }
 
-/* Draw the chat input field */
-static void DrawChatInput(void)
+/* Live status for the header. The provider slice owns the wording and knows
+   the active model, the key state and the TLS setting. */
+static void Chat_StatusText(char *out, short max)
 {
-    Rect frameRect  = sInputRect;
-    Rect shadowRect = frameRect;
-    Rect innerRect  = frameRect;
-    Rect labelClip;
-    GrafPtr savePort;
-    Rect origClip;
-
-    /* Save original clipping */
-    GetPort(&savePort);
-    origClip = savePort->clipRgn[0]->rgnBBox;
-
-    /* Draw the label text above the input area */
-    SetRect(&labelClip, frameRect.left, frameRect.top - 15, frameRect.right, frameRect.top - 2);
-
-    ClipRect(&labelClip);
-    BackColor(whiteColor);
-    EraseRect(&labelClip);
-
-    /* Draw the label with proper text settings */
-    MoveTo(frameRect.left + 5, frameRect.top - 5);
-    ApplyTextFormatting(kFontGeneva, 9, bold);
-    DrawString("\pType your prompt and press Return (Shift+Return for new line):");
-    TextFace(normal);
-
-    /* Draw the input box area */
-    Rect inputAreaClip = frameRect;
-    inputAreaClip.left -= 5;
-    inputAreaClip.right += 5;
-    inputAreaClip.bottom += 5;
-    inputAreaClip.top -= 1;
-    ClipRect(&inputAreaClip);
-
-    /* Draw shadow effect */
-    PenSize(1, 1);
-    OffsetRect(&shadowRect, 1, 1);
-    PenPat(&qd.gray);
-    FrameRect(&shadowRect);
-    PenNormal();
-
-    /* Draw a frame around the input area */
-    ForeColor(blackColor);
-    FrameRect(&frameRect);
-
-    /* Draw a light background for the input field */
-    InsetRect(&frameRect, 1, 1);
-    BackPat(&qd.white);
-    BackColor(whiteColor);
-    EraseRect(&frameRect);
-
-    /* Adjust text positioning */
-    if (sInputTE != NULL) {
-        innerRect = frameRect;
-        InsetRect(&innerRect, 3, 3);
-
-        if ((*sInputTE)->viewRect.top != innerRect.top ||
-            (*sInputTE)->viewRect.left != innerRect.left ||
-            (*sInputTE)->viewRect.bottom != innerRect.bottom ||
-            (*sInputTE)->viewRect.right != innerRect.right) {
-
-            (*sInputTE)->viewRect = innerRect;
-            (*sInputTE)->destRect = innerRect;
-            TECalText(sInputTE);
-        }
+    if (out == NULL || max <= 0) {
+        return;
     }
 
-    /* Return to standard clipping */
-    ClipRect(&origClip);
+    out[0] = '\0';
+    API_GetStatusText(out, max);
+}
+
+/* The header strip is derived from the content rect every time. */
+static void Chat_HeaderRect(Rect *out)
+{
+    SetRect(out, sContentRect.left + kChatEdge, sContentRect.top + kChatEdge,
+            sContentRect.right - kChatEdge, sContentRect.top + kChatEdge + kChatHeaderH);
+}
+
+/* The status text in the header changes with the model and the request state. */
+static void Chat_InvalidateHeader(void)
+{
+    Rect header;
+
+    Chat_HeaderRect(&header);
+    InvalRect(&header);
+}
+
+/* Platinum-style content well: white fill, one-pixel black outline, white just
+   inside the top and left, dark grey just inside the bottom and right. Port,
+   pen, colour and pattern are restored. */
+static void DrawInsetWell(const Rect *bounds)
+{
+    Rect r;
+    GrafPtr savePort;
+    PenState savePen;
+    Pattern saveBackPat;
+    RGBColor saveFore, saveBack;
+
+    if (bounds == NULL) {
+        return;
+    }
+
+    GetPort(&savePort);
+    GetPenState(&savePen);
+    GetForeColor(&saveFore);
+    GetBackColor(&saveBack);
+    { GrafPtr p; GetPort(&p); saveBackPat = p->bkPat; }
+
+    r = *bounds;
+    {
+        static const RGBColor white = {0xFFFF, 0xFFFF, 0xFFFF};
+
+        RGBBackColor(&white);
+    }
+    BackPat(&qd.white);
+    EraseRect(&r);
+
+    PenSize(1, 1);
+    PenPat(&qd.black);
+    ForeColor(blackColor);
+    FrameRect(&r);
+
+    InsetRect(&r, 1, 1);
+
+    PenPat(&qd.white);
+    ForeColor(whiteColor);
+    MoveTo(r.left, r.bottom - 1);
+    LineTo(r.left, r.top);
+    LineTo(r.right - 1, r.top);
+
+    PenPat(&qd.dkGray);
+    ForeColor(blackColor);
+    MoveTo(r.right - 1, r.top);
+    LineTo(r.right - 1, r.bottom - 1);
+    LineTo(r.left, r.bottom - 1);
+
+    SetPenState(&savePen);
+    RGBForeColor(&saveFore);
+    RGBBackColor(&saveBack);
+    BackPat(&saveBackPat);
+    SetPort(savePort);
+}
+
+/* Header strip: app name left, live status right, one grey rule underneath. */
+static void DrawChatHeader(void)
+{
+    Rect header;
+    GrafPtr savePort;
+    PenState savePen;
+    Pattern saveBackPat;
+    RGBColor saveFore, saveBack;
+    short saveFont, saveSize, saveFace;
+    char status[96];
+    Str255 statusStr;
+    RGBColor smallPrint = {0x8888, 0x8888, 0x8888};
+
+    GetPort(&savePort);
+    SetPort(sWindow);
+    GetPenState(&savePen);
+    GetForeColor(&saveFore);
+    GetBackColor(&saveBack);
+    { GrafPtr p; GetPort(&p); saveBackPat = p->bkPat; }
+    saveFont = sWindow->txFont;
+    saveSize = sWindow->txSize;
+    saveFace = sWindow->txFace;
+
+    Chat_HeaderRect(&header);
+
+    BackPat(&qd.ltGray);
+    EraseRect(&header);
+
+    TextFont(kFontGeneva);
+    TextSize(kChatLabelSize);
+    TextFace(bold);
+    ForeColor(blackColor);
+    MoveTo(header.left, header.bottom - kChatHeaderBase);
+    DrawString("\pMacintosh AI");
+
+    Chat_StatusText(status, (short)sizeof(status));
+    CStrToPStr(status, statusStr);
+
+    TextFace(normal);
+    RGBForeColor(&smallPrint);
+    MoveTo(header.right - StringWidth(statusStr), header.bottom - kChatHeaderBase);
+    DrawString(statusStr);
+
+    PenSize(1, 1);
+    PenPat(&qd.dkGray);
+    ForeColor(blackColor);
+    MoveTo(header.left, header.bottom);
+    LineTo(header.right, header.bottom);
+
+    SetPenState(&savePen);
+    RGBForeColor(&saveFore);
+    RGBBackColor(&saveBack);
+    BackPat(&saveBackPat);
+    TextFont(saveFont);
+    TextSize(saveSize);
+    TextFace(saveFace);
+    SetPort(savePort);
+}
+
+/* One-pixel grey rule between the transcript and the input well. */
+static void DrawChatRule(void)
+{
+    short y = sInputRect.top - kChatRuleOffset;
+    GrafPtr savePort;
+    PenState savePen;
+    RGBColor saveFore;
+
+    GetPort(&savePort);
+    SetPort(sWindow);
+    GetPenState(&savePen);
+    GetForeColor(&saveFore);
+
+    PenSize(1, 1);
+    PenPat(&qd.dkGray);
+    ForeColor(blackColor);
+    MoveTo(sContentRect.left + kChatEdge, y);
+    LineTo(sContentRect.right - kChatEdge, y);
+
+    SetPenState(&savePen);
+    RGBForeColor(&saveFore);
+    SetPort(savePort);
+}
+
+/* Draw the "Message:" label and the input well. */
+static void DrawChatInput(void)
+{
+    GrafPtr savePort;
+    PenState savePen;
+    RGBColor saveFore;
+    short saveFont, saveSize, saveFace;
+
+    GetPort(&savePort);
+    SetPort(sWindow);
+    GetPenState(&savePen);
+    GetForeColor(&saveFore);
+    saveFont = sWindow->txFont;
+    saveSize = sWindow->txSize;
+    saveFace = sWindow->txFace;
+
+    DrawInsetWell(&sInputRect);
+
+    TextFont(kFontGeneva);
+    TextSize(kChatLabelSize);
+    TextFace(bold);
+    ForeColor(blackColor);
+    MoveTo(sContentRect.left + kChatEdge, sInputRect.top + kChatLabelBase);
+    DrawString("\pMessage:");
+
+    SetPenState(&savePen);
+    RGBForeColor(&saveFore);
+    TextFont(saveFont);
+    TextSize(saveSize);
+    TextFace(saveFace);
+    SetPort(savePort);
 }
 
 /* Handle mouse clicks in the content area of the chat window */
@@ -426,7 +600,7 @@ static Boolean ChatWindow_HandleContentClick(Point localPt)
         sFocusTE = sInputTE;
 
         if (oldSelStart != (*sInputTE)->selStart || oldSelEnd != (*sInputTE)->selEnd) {
-            TEUpdate(&sInputRect, sInputTE);
+            TEUpdate(&(*sInputTE)->viewRect, sInputTE);
         }
 
         ClipRect(&saveClip);
@@ -541,69 +715,66 @@ static void ChatWindow_HandleActivate(Boolean becomingActive)
 /* Render the chat window contents */
 static void ChatWindow_Render(void)
 {
+    GrafPtr savePort;
+    Rect teRect;
+
     if (!sInitialized || sWindow == NULL) {
         return;
     }
 
+    GetPort(&savePort);
     SetPort(sWindow);
 
-    /* Draw the window with standard frame */
-    DrawStandardFrame(sWindow);
+    /* Chrome is a flat grey; the content lives in white wells. A 1-bit pattern
+     * dithers into visible noise on a 256-colour Mac (the header and the whole
+     * transcript were unreadable), so tint with the background colour and fill
+     * with an all-ones pattern instead. */
+    {
+        static const RGBColor chrome = {0xCCCC, 0xCCCC, 0xCCCC};
 
-    /* Draw a frame around the display area */
-    if (sDisplayTE != NULL) {
-        PenNormal();
-        PenSize(1, 1);
-        FrameRect(&sDisplayRect);
+        RGBBackColor(&chrome);
+        BackPat(&qd.white);
+        EraseRect(&sWindow->portRect);
     }
+    PenNormal();
 
-    /* Draw the scrollbar */
+    DrawChatHeader();
+    DrawChatRule();
+    DrawInsetWell(&sDisplayRect);
+
+    /* Draw the scrollbar, enabled only when the text is taller than its view */
     if (sScrollBar != NULL) {
-        /* Update scrollbar state */
         short viewHeight = 0, textHeight = 0;
+
         if (sDisplayTE != NULL && *sDisplayTE != NULL) {
             viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
             textHeight = (short)((*sDisplayTE)->nLines * (*sDisplayTE)->lineHeight);
 
-            /* Enable or disable scrollbar based on content */
-            if (textHeight > viewHeight) {
-                HiliteControl(sScrollBar, 0); /* enabled */
-            }
-            else {
-                HiliteControl(sScrollBar, 255); /* disabled */
-            }
+            HiliteControl(sScrollBar, textHeight > viewHeight ? 0 : 255);
         }
 
         DrawControls(sWindow);
     }
 
-    /* Draw the chat display content */
-    if (sDisplayTE != NULL) {
-        GrafPtr savePort;
-        Rect clipSave;
-
-        GetPort(&savePort);
-        clipSave = savePort->clipRgn[0]->rgnBBox;
-
-        Rect textClip = sDisplayRect;
-        InsetRect(&textClip, 3, 3);
-
+    /* Draw the transcript inside its well */
+    if (sDisplayTE != NULL && *sDisplayTE != NULL) {
+        teRect = (*sDisplayTE)->viewRect;
         BackColor(whiteColor);
         ForeColor(blackColor);
-
-        ClipRect(&textClip);
-        TEUpdate(&(*sDisplayTE)->viewRect, sDisplayTE);
-
-        ClipRect(&clipSave);
+        TEUpdate(&teRect, sDisplayTE);
     }
 
-    /* Draw the input area */
+    /* Draw the input well and its text */
     DrawChatInput();
 
-    /* Update input text field */
-    if (sInputTE != NULL) {
-        TEUpdate(&sInputRect, sInputTE);
+    if (sInputTE != NULL && *sInputTE != NULL) {
+        teRect = (*sInputTE)->viewRect;
+        BackColor(whiteColor);
+        ForeColor(blackColor);
+        TEUpdate(&teRect, sInputTE);
     }
+
+    SetPort(savePort);
 }
 
 /* Handle update events for the chat window */
@@ -631,14 +802,19 @@ static void ClearChatInput(void)
 
     GrafPtr savePort;
     Rect saveClip;
+    RGBColor saveBack;
+    Pattern saveBackPat;
 
     GetPort(&savePort);
     saveClip = savePort->clipRgn[0]->rgnBBox;
+    GetBackColor(&saveBack);
+    { GrafPtr p; GetPort(&p); saveBackPat = p->bkPat; }
 
     Rect frameRect = sInputRect;
-    InsetRect(&frameRect, 1, 1);
+    InsetRect(&frameRect, 2, 2);
     ClipRect(&frameRect);
 
+    BackPat(&qd.white);
     BackColor(whiteColor);
     EraseRect(&frameRect);
 
@@ -647,10 +823,12 @@ static void ClearChatInput(void)
     TESetSelect(0, 0, sInputTE);
 
     TEActivate(sInputTE);
-    TEUpdate(&frameRect, sInputTE);
+    TEUpdate(&(*sInputTE)->viewRect, sInputTE);
     sFocusTE = sInputTE;
 
     ClipRect(&saveClip);
+    RGBBackColor(&saveBack);
+    BackPat(&saveBackPat);
 }
 
 /* Format a new message with proper styling */
@@ -658,7 +836,7 @@ static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
 {
     char formattedMsg[kMaxResponseLength + 8];
     const char *prefix;
-    short prefixLen, msgLen, maxMsg;
+    short prefixLen, msgLen, maxMsg, leadLen, start;
     static Boolean isAdding = false;
 
     /* Prevent recursive calls */
@@ -689,11 +867,39 @@ static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
 
     /* A transcript cannot grow past TextEdit's 16-bit length field. When it
        would, rebuild from history (which keeps the newest messages) first. */
-    if (!sRefreshing && (*sDisplayTE)->teLength + prefixLen + msgLen + 1 > 30000) {
+    leadLen = ((*sDisplayTE)->teLength > 0) ? 1 : 0;
+    if (!sRefreshing && (*sDisplayTE)->teLength + leadLen + prefixLen + msgLen + 1 > 30000) {
         RefreshConversationDisplay();
+        leadLen = ((*sDisplayTE)->teLength > 0) ? 1 : 0;
     }
 
+    /* One blank line between turns */
+    if (leadLen > 0) {
+        AppendDisplayText("\r", 1);
+    }
+
+    start = (*sDisplayTE)->teLength;
     AppendDisplayText(formattedMsg, (short)(prefixLen + msgLen + 1));
+
+    /* The turn label is bold; the body stays plain. */
+    if (isUserMessage && prefixLen > 0) {
+        TextStyle style;
+
+        style.tsFont  = kFontMonaco;
+        style.tsFace  = bold;
+        style.tsSize  = kChatBodySize;
+        style.tsColor.red   = 0; /* tsColor is an RGBColor, not a ColorIndex */
+        style.tsColor.green = 0;
+        style.tsColor.blue  = 0;
+
+        TESetSelect(start, (short)(start + prefixLen), sDisplayTE);
+        TESetStyle(doAll, &style, false, sDisplayTE);
+        TESetSelect((short)(start + prefixLen), (short)(start + prefixLen), sDisplayTE);
+        TEDeactivate(sDisplayTE);
+    }
+
+    /* The model can change by adding a message, so refresh the status line */
+    Chat_InvalidateHeader();
 
     isAdding = false;
 }
@@ -815,6 +1021,7 @@ static void RefreshConversationDisplay(void)
     /* Restore clipping and trigger redraw */
     ClipRect(&saveClip);
     InvalRect(&sDisplayRect);
+    SetPort(savePort);
 
     sRefreshing = false;
 }
@@ -882,6 +1089,7 @@ void ChatWindow_SendMessage(void)
             response = "Error: the local model returned nothing";
         }
 
+        AppendDisplayText("\r", 1);
         AppendDisplayText("AI: ", 4);
         AppendDisplayText(response, (short)strlen(response));
         AppendDisplayText("\r", 1);
@@ -898,19 +1106,25 @@ void ChatWindow_SendMessage(void)
             err = "request failed";
         }
 
+        AppendDisplayText("\r", 1);
         AppendDisplayText("AI: ", 4);
         AppendDisplayText(err, (short)strlen(err));
         AppendDisplayText("\r", 1);
         return;
     }
 
-    /* Remember where the response starts so it can be cancelled cleanly */
-    sResponseStart  = (*sDisplayTE)->teLength;
-    sResponseLength = 0;
+    /* Remember where the response starts so it can be cancelled cleanly,
+       including the blank line that separates it from the user's turn */
+    sResponseStart     = (*sDisplayTE)->teLength;
+    sResponseLength    = 0;
     sResponseBuffer[0] = '\0';
 
+    if (sResponseStart > 0) {
+        AppendDisplayText("\r", 1);
+    }
     AppendDisplayText("AI: ", 4);
     sAwaiting = true;
+    Chat_InvalidateHeader();
 }
 
 /* Add a message to the chat display */
@@ -1146,6 +1360,7 @@ static void CancelResponse(void)
     sAwaiting          = false;
     sResponseLength    = 0;
     sResponseBuffer[0] = '\0';
+    Chat_InvalidateHeader();
 
     if (sDisplayTE == NULL || *sDisplayTE == NULL) {
         return;
@@ -1210,6 +1425,7 @@ void ChatWindow_Idle(void)
         sAwaiting          = false;
         sResponseLength    = 0;
         sResponseBuffer[0] = '\0';
+        Chat_InvalidateHeader();
     }
     else if (state == kAPIStateError) {
         const char *err = API_LastError();
@@ -1225,5 +1441,48 @@ void ChatWindow_Idle(void)
         sAwaiting          = false;
         sResponseLength    = 0;
         sResponseBuffer[0] = '\0';
+        Chat_InvalidateHeader();
     }
+}
+
+/* ---------------------------------------------------------------- */
+/* Test hooks (see src/selftest.c)                                   */
+/* ---------------------------------------------------------------- */
+
+/* Put text in the input field and press Return, through the same path the
+   user's keystrokes take. */
+Boolean ChatWindow_SubmitForTest(const char *prompt)
+{
+    if (prompt == NULL || sInputTE == NULL || *sInputTE == NULL) {
+        return false;
+    }
+
+    TESetText((Ptr)prompt, (long)strlen(prompt), sInputTE);
+    ChatWindow_SendMessage();
+    return true;
+}
+
+/* Copy the transcript out, bounded. */
+short ChatWindow_TranscriptForTest(char *out, short max)
+{
+    short len;
+
+    if (out == NULL || max <= 0) {
+        return 0;
+    }
+    out[0] = '\0';
+
+    if (sDisplayTE == NULL || *sDisplayTE == NULL || (*sDisplayTE)->hText == NULL) {
+        return 0;
+    }
+
+    len = (*sDisplayTE)->teLength;
+    if (len > (short)(max - 1)) {
+        len = (short)(max - 1);
+    }
+    if (len > 0) {
+        BlockMoveData(*(*sDisplayTE)->hText, out, (Size)len);
+    }
+    out[len] = '\0';
+    return len;
 }

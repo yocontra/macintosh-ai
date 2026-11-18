@@ -5,15 +5,21 @@
 extern "C" {
 #endif
 
-/* Toolbox-free SSE decoder for the two supported providers.
+/* Toolbox-free SSE decoder for the supported providers.
  *
- * Provider ids mirror APIProvider in api_client.h (which pulls in <Types.h>
- * and therefore cannot be included here):
- *     0 = Anthropic, 1 = OpenAI
+ * The dialect ids are deliberately the same numbers api_client.h uses for
+ * APIProvider (0 = Anthropic, 1 = OpenAI) so the client can pass its provider
+ * through unchanged; Gemini is an extra dialect the client may select.
  *
  * The decoder keeps its own line accumulator, so a `data:` line split across
  * two HTTP body chunks is decoded correctly.  Decoded assistant text is
  * appended to `buf` (always NUL-terminated, `cap` counts the NUL). */
+
+enum {
+    kAPIDialectAnthropic = 0,
+    kAPIDialectOpenAI    = 1,
+    kAPIDialectGemini    = 2
+};
 
 typedef struct { char *buf; short len; short cap; } APIParse;
 

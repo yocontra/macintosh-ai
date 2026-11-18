@@ -9,7 +9,31 @@
 #include "../constants.h"
 #include "../error.h"
 #include "splash_window.h"
+#include "utils.h"
 #include "window_manager.h"
+
+/* Version string is supplied by CMake; plain source builds report "dev". */
+#ifndef APP_VERSION_STR
+#define APP_VERSION_STR "dev"
+#endif
+
+/* Splash layout, window-local pixels. This is the only place these numbers live. */
+enum {
+    kSplashNameFont     = 1,  /* application font: Chicago */
+    kSplashMarkFontSize = 36, /* "AI" inside the brand block */
+    kSplashNameSize     = 12,
+    kSplashSmallSize    = 9,  /* tagline and version */
+    kSplashMarkSize     = 120, /* the brand block is square */
+    kSplashLockupText   = 62,  /* name gap + tagline gap + small print below the mark */
+    kSplashMinTop       = 24,  /* never crowd the title bar */
+    kSplashNameGap      = 30, /* brand block bottom to the app-name baseline */
+    kSplashTaglineGap   = 20, /* app-name baseline to the tagline baseline */
+    kSplashButtonWidth  = 120,
+    kSplashButtonHeight = 24,
+    kSplashButtonBottom = 72, /* window bottom to the button bottom */
+    kSplashDefaultRing  = 3,  /* ring offset for the default button */
+    kSplashEdgeInset    = 16  /* version string inset from the window edges */
+};
 
 /* Private module variables */
 static WindowRef sWindow              = NULL;
@@ -17,131 +41,138 @@ static ControlHandle sStartChatButton = NULL;
 static Boolean sInitialized           = false;
 static Boolean sIsVisible             = false;
 
-/* Initialize a pattern */
-static void PatternInit(Pattern *pattern, unsigned char b1, unsigned char b2, unsigned char b3,
-                        unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7,
-                        unsigned char b8)
+/* The Start Chat control rectangle, derived from the window every time so the
+   layout constants above stay authoritative. */
+static void Splash_ButtonRect(const Rect *frameRect, Rect *buttonRect)
 {
-    pattern->pat[0] = b1;
-    pattern->pat[1] = b2;
-    pattern->pat[2] = b3;
-    pattern->pat[3] = b4;
-    pattern->pat[4] = b5;
-    pattern->pat[5] = b6;
-    pattern->pat[6] = b7;
-    pattern->pat[7] = b8;
+    short centre = (frameRect->left + frameRect->right) / 2;
+    short top    = frameRect->bottom - kSplashButtonBottom;
+
+    SetRect(buttonRect, centre - kSplashButtonWidth / 2, top,
+            centre + kSplashButtonWidth / 2, top + kSplashButtonHeight);
 }
 
-/* Draw the splash window UI elements */
+/* Draw the splash window UI elements.
+ *
+ * One lockup: brand block, app name, tagline, then the version in small grey
+ * print. Port, pen, pattern, colour and text state are all restored. */
 static void DrawSplashWindowUI(WindowPtr window)
 {
-    Rect frameRect, iconRect;
-    Pattern theBits;
-    short i, j, patternHeight;
+    Rect frameRect, markRect, buttonRect;
+    GrafPtr savePort;
+    PenState savePen;
+    Pattern saveBackPat;
+    RGBColor saveFore, saveBack;
+    FontInfo fontInfo;
+    Str255 version;
+    RGBColor smallPrint = {0x4444, 0x4444, 0x4444};
+    short saveFont, saveSize, saveFace;
+    short markLeft, markTop, baseline, width;
+    short lockupSpace;
 
-    /* Get window dimensions */
-    frameRect     = window->portRect;
-    patternHeight = 80;
-
-    /* Create visual gradient for background */
-    for (i = 0; i < patternHeight; i++) {
-        /* Create a pattern for this row */
-        for (j = 0; j < 8; j++) {
-            theBits.pat[j] = (i % 4 == 0) ? 0xAA : ((i % 4 == 1) ? 0x55 : 0);
-        }
-
-        /* Set the pattern and draw a line */
-        PenPat(&theBits);
-        MoveTo(frameRect.left, frameRect.top + i);
-        LineTo(frameRect.right, frameRect.top + i);
+    if (window == NULL) {
+        return;
     }
 
-    /* Fill rest of window with solid color */
-    PenNormal();
+    GetPort(&savePort);
+    SetPort(window);
+    GetPenState(&savePen);
+    GetForeColor(&saveFore);
+    GetBackColor(&saveBack);
+    { GrafPtr p; GetPort(&p); saveBackPat = p->bkPat; }
+    saveFont = window->txFont;
+    saveSize = window->txSize;
+    saveFace = window->txFace;
+
+    frameRect = window->portRect;
+
+    /* Flat chrome. A 1-bit pattern dithers into visible stripes on a colour
+     * display and swallowed the title, so tint the background colour and fill
+     * with an all-ones pattern: solid on colour, white on a 1-bit screen. */
+    {
+        static const RGBColor chrome = {0xCCCC, 0xCCCC, 0xCCCC};
+
+        RGBBackColor(&chrome);
+    }
+    BackPat(&qd.white);
+    EraseRect(&frameRect);
+
+    /* Brand block: solid black square with the mark knocked out in white.
+       The lockup is centred in the space above the Start Chat button. */
+    markLeft    = (frameRect.left + frameRect.right - kSplashMarkSize) / 2;
+    lockupSpace = frameRect.bottom - kSplashButtonBottom;
+    markTop     = (lockupSpace - kSplashMarkSize - kSplashLockupText) / 2;
+    if (markTop < frameRect.top + kSplashMinTop) {
+        markTop = frameRect.top + kSplashMinTop;
+    }
+    SetRect(&markRect, markLeft, markTop, markLeft + kSplashMarkSize, markTop + kSplashMarkSize);
+
+    PenPat(&qd.black);
+    PenSize(1, 1);
     ForeColor(blackColor);
-    BackColor(whiteColor);
+    PaintRect(&markRect);
 
-    /* Draw a computer screen with text "AI for Macintosh" */
-    SetRect(&iconRect, (frameRect.right - 100) / 2, frameRect.top + 30, (frameRect.right + 100) / 2,
-            frameRect.top + 100);
-
-    /* Draw computer outline */
-    PenSize(2, 2);
-    FrameRoundRect(&iconRect, 8, 8);
-
-    /* Draw computer screen area with a different pattern background */
-    InsetRect(&iconRect, 8, 8);
-
-    /* Fill with solid white background as requested */
-    BackColor(whiteColor);
-    EraseRoundRect(&iconRect, 4, 4); /* Erase to white */
-
-    /* Draw frame */
-    PenNormal();
-    FrameRoundRect(&iconRect, 4, 4);
-
-    /* Draw "AI" text in futuristic style */
     TextFont(kFontMonaco);
-    TextSize(36); /* Bigger text size */
+    TextSize(kSplashMarkFontSize);
     TextFace(bold);
-    ForeColor(blackColor); /* Use black for better visibility */
-
-    /* Center the text in the screen - both horizontally and vertically */
-    /* For vertical centering, we need to account for text ascent and add a few pixels right */
-    short aiTextWidth  = StringWidth("\pAI");
-    short aiTextHeight = 30; /* Approximate height for this font size */
-    MoveTo(iconRect.left + (iconRect.right - iconRect.left - aiTextWidth) / 2 +
-               5, /* Add 5 pixels to the right */
-           iconRect.top + (iconRect.bottom - iconRect.top - aiTextHeight) / 2 + aiTextHeight);
+    ForeColor(whiteColor);
+    GetFontInfo(&fontInfo);
+    width = StringWidth("\pAI");
+    MoveTo(markRect.left + (kSplashMarkSize - width) / 2,
+           markRect.top + (kSplashMarkSize - (fontInfo.ascent + fontInfo.descent)) / 2 +
+               fontInfo.ascent);
     DrawString("\pAI");
 
-    /* Reset text style for rest of drawing */
-    TextFont(kFontGeneva);
-    TextSize(18);
+    /* App name and one-line tagline, centred on the mark. */
+    TextFont(kSplashNameFont);
+    TextSize(kSplashNameSize);
     TextFace(bold);
     ForeColor(blackColor);
+    baseline = markRect.bottom + kSplashNameGap;
+    width    = StringWidth("\pMacintosh AI");
+    MoveTo((frameRect.left + frameRect.right - width) / 2, baseline);
+    DrawString("\pMacintosh AI");
 
-    /* Add more space after the box */
-    short titleSpacing = 16; /* Requested 16px spacing */
-
-    /* Calculate vertical spacing for better balance */
-    short availableSpace =
-        75 - 25 -
-        titleSpacing; /* Space between iconRect.bottom and the decorative line, minus new spacing */
-    short textHeight = 18 * 2 + 5; /* Height of two lines of text with 5px spacing */
-    short topMargin  = (availableSpace - textHeight) / 2; /* Center vertically */
-
-    /* Draw "for" with Macintosh font - properly spaced, with additional spacing */
-    MoveTo((frameRect.right - StringWidth("\pfor")) / 2,
-           iconRect.bottom + titleSpacing + topMargin + 18);
-    DrawString("\pfor");
-
-    /* Draw "Macintosh" with classic Mac font */
     TextFont(kFontGeneva);
-    TextSize(18);
-    TextFace(bold);
-    /* Add more spacing between for and Macintosh */
-    MoveTo((frameRect.right - StringWidth("\pMacintosh")) / 2,
-           iconRect.bottom + titleSpacing + topMargin + 18 + 15 + 18);
-    DrawString("\pMacintosh");
-
-    /* Add decorative lines */
-    PenSize(1, 1);
-    PenPat(&qd.gray);
-    MoveTo(frameRect.left + 20, iconRect.bottom + 75);
-    LineTo(frameRect.right - 20, iconRect.bottom + 75);
-    PenNormal();
-
-    /* Draw subtitle */
-    TextFont(kFontGeneva);
-    TextSize(12);
+    TextSize(kSplashSmallSize);
     TextFace(normal);
+    baseline += kSplashTaglineGap;
+    width = StringWidth("\pAI chat for the Macintosh");
+    MoveTo((frameRect.left + frameRect.right - width) / 2, baseline);
+    DrawString("\pAI chat for the Macintosh");
+
+    /* Start Chat is the default action: a black ring three pixels outside the
+       control's own outline reads as the double ring. The control draws on top. */
+    Splash_ButtonRect(&frameRect, &buttonRect);
+    InsetRect(&buttonRect, -kSplashDefaultRing, -kSplashDefaultRing);
+    PenPat(&qd.black);
+    PenSize(1, 1);
+    FrameRect(&buttonRect);
+
+    /* Version, bottom right, small and grey. */
+    CStrToPStr(APP_VERSION_STR, version);
+    TextFont(kFontGeneva);
+    TextSize(kSplashSmallSize);
+    TextFace(normal);
+    RGBForeColor(&smallPrint);
+    width = StringWidth(version);
+    MoveTo(frameRect.right - kSplashEdgeInset - width, frameRect.bottom - kSplashEdgeInset);
+    DrawString(version);
+
+    SetPenState(&savePen);
+    RGBForeColor(&saveFore);
+    RGBBackColor(&saveBack);
+    BackPat(&saveBackPat);
+    TextFont(saveFont);
+    TextSize(saveSize);
+    TextFace(saveFace);
+    SetPort(savePort);
 }
 
 /* Initialize and create the splash window */
 Boolean SplashWindow_Initialize(void)
 {
-    Rect screenRect, windowRect, frameRect, buttonRect;
+    Rect screenRect, windowRect, buttonRect;
     short screenWidth, screenHeight;
     short windowWidth, windowHeight;
     OSErr err;
@@ -173,7 +204,7 @@ Boolean SplashWindow_Initialize(void)
             (screenHeight - windowHeight) / 2 + windowHeight);
 
     /* Create the window directly like the chat window does */
-    sWindow = NewWindow(NULL, &windowRect, "\pAI for Macintosh", true, documentProc, (WindowPtr)-1,
+    sWindow = NewWindow(NULL, &windowRect, "\pMacintosh AI", true, documentProc, (WindowPtr)-1,
                         true, 0);
 
     if (sWindow == NULL) {
@@ -188,16 +219,11 @@ Boolean SplashWindow_Initialize(void)
     /* Set port for drawing */
     SetPort(sWindow);
 
-    /* Get window dimensions for drawing */
-    frameRect = sWindow->portRect;
-
     /* Draw all the UI elements */
     DrawSplashWindowUI(sWindow);
 
-    /* Create "Start Chat" button - standard Mac rounded button with proper style */
-    SetRect(&buttonRect, (frameRect.right - 120) / 2, /* Center button */
-            frameRect.top + 190,                      /* Position below the text (moved up 40px) */
-            (frameRect.right + 120) / 2, frameRect.top + 215);
+    /* Create "Start Chat" button: the default action, bottom centre */
+    Splash_ButtonRect(&sWindow->portRect, &buttonRect);
 
     /* Use proper button proc for Macintosh (pushButProc without outline for better look) */
     sStartChatButton = NewControl(sWindow, &buttonRect, "\pStart Chat", true, 0, 0, 1, pushButProc,
@@ -241,10 +267,13 @@ void SplashWindow_Dispose(void)
 /* Render the splash window contents */
 void SplashWindow_Render(void)
 {
+    GrafPtr savePort;
+
     if (!sInitialized || sWindow == NULL) {
         return;
     }
 
+    GetPort(&savePort);
     SetPort(sWindow);
 
     /* Draw the UI elements using the shared function */
@@ -254,6 +283,8 @@ void SplashWindow_Render(void)
     if (sStartChatButton != NULL) {
         DrawControls(sWindow);
     }
+
+    SetPort(savePort);
 }
 
 /* Handle update events for the splash window */

@@ -58,4 +58,9 @@ void ChatWindow_Idle(void);
 /* Toggle between AI models */
 void ChatWindow_ToggleAIModel(void);
 
+/* Test hooks: used by src/selftest.c, which drives the UI from inside the
+   guest so the harness never has to post input events. */
+Boolean ChatWindow_SubmitForTest(const char *prompt);
+short   ChatWindow_TranscriptForTest(char *out, short max);
+
 #endif /* CHAT_WINDOW_H */

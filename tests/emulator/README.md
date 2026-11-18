@@ -1,5 +1,33 @@
 # Emulator test harness (SheepShaver, Mac OS 9)
 
+## Two ways to run this, and why the second one exists
+
+**`selftest.sh` — input-free, the default.** The application looks for a file
+called `MacintoshAI selftest` in the guest's `System Folder:Preferences` at
+startup. When it is there it drives its own UI (open the chat window, type a
+prompt, submit it, run a second round trip), writes `MacintoshAI selftest log`
+beside it and quits. The harness only boots the VM, waits, quits it and reads
+the log off the clone. No mouse or keyboard events are posted, so **it does not
+move the cursor of whoever is using this Mac**, and it cannot fail because a
+synthetic click was lost inside a modal tracking loop.
+
+```
+tests/emulator/selftest.sh
+```
+
+**`capture.sh` — input-free screenshots.** Boots and photographs the screen on
+a timer with `CGWindowListCreateImage`, which only reads. Use it to see what
+the app looks like:
+
+```
+tests/emulator/capture.sh 90 3      # 90 s of frames, one every 3 s
+```
+
+**The scenario scripts (`run.sh 01-launch`, …) post real mouse and keyboard
+events** and are kept for the cases that need them. They move the cursor, so
+run them only when you are not using the Mac, and see "Open issue" at the
+bottom: some of them are red because synthetic input is unreliable here.
+
 Plan tier **T2** (boot, launch, render, menus, dialogs, response paths) and the
 optional tier **T3** (a real HTTPS request to `api.anthropic.com`) for
 `macintosh-ai`.

@@ -291,6 +291,22 @@ if [ -n "$SERVER" ]; then
     ditto "$SERVER" "$STARTUP/LaunchAPPLServer" 2>/dev/null || true
 fi
 
+# The in-guest self-test: the application looks for this file at startup and,
+# if it is there, drives its own UI, writes "MacintoshAI selftest log" beside
+# it and quits. MAC_EMU_SELFTEST=1 asks for it. No input events are involved,
+# so the harness never touches the real mouse or keyboard.
+# Either the environment or a marker file asks for it, so a scenario runner that
+# builds the VM in a subprocess with its own environment can still request it.
+if [ "${MAC_EMU_SELFTEST:-0}" = "1" ] || [ -f "$WORK/request-selftest" ]; then
+    PREFSDIR="$MNT/System Folder/Preferences"
+    mkdir -p "$PREFSDIR"
+    : > "$PREFSDIR/$APP_NAME selftest"
+    [ -f "$PREFSDIR/$APP_NAME selftest" ] || fail "could not create the selftest trigger"
+    echo "make_vm: selftest trigger in System Folder:Preferences"
+else
+    rm -f "$MNT/System Folder/Preferences/$APP_NAME selftest" 2>/dev/null || true
+fi
+
 trap - EXIT INT TERM
 diskutil unmount force "$MNT" >/dev/null 2>&1 \
     || hdiutil detach "$MNT" -force >/dev/null 2>&1 \

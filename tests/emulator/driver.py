@@ -339,7 +339,13 @@ def _emulator_pid() -> int | None:
 
 
 def activate_emulator() -> None:
-    """Bring SheepShaver to the front so posted events reach it."""
+    """Bring SheepShaver to the front so posted events reach it.
+
+    A no-op in quiet mode: events are addressed to the emulator's process
+    directly, so there is no need to take the focus away from the user.
+    """
+    if QUIET:
+        return
     pid = _emulator_pid()
     if pid is None:
         return
@@ -375,16 +381,23 @@ def check_input_works() -> None:
     require_modules()
     start = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
     target = (start.x + 24.0, start.y + 24.0)
+    if QUIET:
+        # Events are addressed to the emulator's process, so the cursor
+        # deliberately does not move and there is nothing to observe here. That
+        # the accessibility permission is present is checked by the caller; the
+        # proof that events land is a scenario that drives the guest.
+        return
+
     move = Quartz.CGEventCreateMouseEvent(
         None, Quartz.kCGEventMouseMoved, target, Quartz.kCGMouseButtonLeft
     )
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, move)
+    post_event(move)
     time.sleep(0.15)
     now = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
     back = Quartz.CGEventCreateMouseEvent(
         None, Quartz.kCGEventMouseMoved, start, Quartz.kCGMouseButtonLeft
     )
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, back)
+    post_event(back)
     time.sleep(0.05)
     if abs(now.x - target[0]) > 2.0 or abs(now.y - target[1]) > 2.0:
         raise HarnessError("CGEventPost has no effect -- " + TCC_MESSAGE, 2)
@@ -403,9 +416,9 @@ def _post_mouse(kind: str, gx: float, gy: float) -> None:
         "moved": Quartz.kCGEventMouseMoved,
     }
     event = Quartz.CGEventCreateMouseEvent(
-        None, kinds[kind], pt, Quartz.kCGMouseButtonLeft
+        event_source(), kinds[kind], pt, Quartz.kCGMouseButtonLeft
     )
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+    post_event(event)
 
 
 def menu_select(title_xy, item_xy) -> None:
@@ -436,6 +449,42 @@ def menu_select(title_xy, item_xy) -> None:
     time.sleep(0.20)
 
 
+_EVENT_SOURCE = None
+
+# Post events straight to the emulator's process instead of to whatever window
+# happens to be under the cursor. At the HID tap every event goes to the
+# frontmost window, which means the harness has to raise SheepShaver first and
+# steals the focus of whoever is using this Mac. Set MAC_EMU_QUIET=0 to go back
+# to the old behaviour (needed only if a click has to land on a different app).
+QUIET = os.environ.get("MAC_EMU_QUIET", "1") != "0"
+
+
+def post_event(event) -> None:
+    """Deliver one event to the emulator without raising its window."""
+    require_modules()
+    pid = _emulator_pid()
+    if QUIET and pid is not None:
+        Quartz.CGEventPostToPid(pid, event)
+    else:
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+
+
+def event_source():
+    """A CGEventSource tied to the HID system state.
+
+    Events created with a NULL source carry no button state, and SheepShaver
+    then delivers the mouse-down but not the mouse-up: a menu stays in its
+    tracking loop and a button highlights without ever being pressed.
+    """
+    global _EVENT_SOURCE
+    if _EVENT_SOURCE is None:
+        require_modules()
+        _EVENT_SOURCE = Quartz.CGEventSourceCreate(
+            Quartz.kCGEventSourceStateHIDSystemState
+        )
+    return _EVENT_SOURCE
+
+
 def click_guest(gx: float, gy: float, count: int = 1, shift: bool = False) -> None:
     require_modules()
     activate_emulator()
@@ -445,29 +494,29 @@ def click_guest(gx: float, gy: float, count: int = 1, shift: bool = False) -> No
     flags = Quartz.kCGEventFlagMaskShift if shift else 0
 
     move = Quartz.CGEventCreateMouseEvent(
-        None, Quartz.kCGEventMouseMoved, pt, Quartz.kCGMouseButtonLeft
+        event_source(), Quartz.kCGEventMouseMoved, pt, Quartz.kCGMouseButtonLeft
     )
     if flags:
         Quartz.CGEventSetFlags(move, flags)
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, move)
+    post_event(move)
     time.sleep(0.05)
 
     for n in range(1, count + 1):
         down = Quartz.CGEventCreateMouseEvent(
-            None, Quartz.kCGEventLeftMouseDown, pt, Quartz.kCGMouseButtonLeft
+            event_source(), Quartz.kCGEventLeftMouseDown, pt, Quartz.kCGMouseButtonLeft
         )
         Quartz.CGEventSetIntegerValueField(down, Quartz.kCGMouseEventClickState, n)
         if flags:
             Quartz.CGEventSetFlags(down, flags)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+        post_event(down)
         time.sleep(0.03)
         up = Quartz.CGEventCreateMouseEvent(
-            None, Quartz.kCGEventLeftMouseUp, pt, Quartz.kCGMouseButtonLeft
+            event_source(), Quartz.kCGEventLeftMouseUp, pt, Quartz.kCGMouseButtonLeft
         )
         Quartz.CGEventSetIntegerValueField(up, Quartz.kCGMouseEventClickState, n)
         if flags:
             Quartz.CGEventSetFlags(up, flags)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+        post_event(up)
         time.sleep(0.04)
 
 
@@ -507,11 +556,11 @@ def _char_keycode(ch: str):
 def _post_key(keycode: int, flags: int = 0) -> None:
     down = Quartz.CGEventCreateKeyboardEvent(None, keycode, True)
     Quartz.CGEventSetFlags(down, flags)
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+    post_event(down)
     time.sleep(0.02)
     up = Quartz.CGEventCreateKeyboardEvent(None, keycode, False)
     Quartz.CGEventSetFlags(up, flags)
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+    post_event(up)
     time.sleep(0.02)
 
 
@@ -726,12 +775,20 @@ def _supervise(vm_dir: str, form: str) -> int:
     """Run SheepShaver as a child, clean it up on SIGTERM/exit."""
     os.makedirs(WORK_DIR, exist_ok=True)
     log = open(LOG_FILE, "ab")
+    # Put the guest window in a corner rather than in the middle of the screen:
+    # this runs on a machine somebody is working on. SDL honours
+    # SDL_VIDEO_WINDOW_POS for the window origin.
+    env = os.environ.copy()
+    env.setdefault("SDL_VIDEO_WINDOW_POS", os.environ.get(
+        "MAC_EMU_WINDOW_POS", "20,%d" % 60))
+
     proc = subprocess.Popen(
         [SHEEPSHAVER] + _launch_args(vm_dir, form),
         stdout=log,
         stderr=log,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
+        env=env,
     )
 
     stopped = {"done": False}

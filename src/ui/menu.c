@@ -1,6 +1,7 @@
 #include <Devices.h>
 #include <Dialogs.h>
 #include <Events.h>
+#include <Fonts.h>
 #include <Menus.h>
 #include <TextEdit.h>
 #include <TextUtils.h>
@@ -34,6 +35,67 @@ enum {
     kSettingsOK           = 9,
     kSettingsCancel       = 10
 };
+
+/* Grey note under the base URL field, drawn by us at Geneva 9 (a DITL
+   StaticText uses the dialog font, which is too large for small print). */
+enum {
+    kSettingsNoteLeft      = 16,
+    kSettingsNoteBaseline1 = 183,
+    kSettingsNoteBaseline2 = 194,
+    kSettingsNoteSize      = 9
+};
+
+/* Draw the two-line small print. Called after every modal step so the dialog's
+   own update does not leave it blank. */
+static void DrawSettingsNote(DialogPtr dialog)
+{
+    GrafPtr savePort;
+    PenState savePen;
+    RGBColor saveFore;
+    short saveFont, saveSize, saveFace;
+    RGBColor noteGrey = {0x8888, 0x8888, 0x8888};
+
+    GetPort(&savePort);
+    SetPort(dialog);
+    GetPenState(&savePen);
+    GetForeColor(&saveFore);
+    saveFont = dialog->txFont;
+    saveSize = dialog->txSize;
+    saveFace = dialog->txFace;
+
+    TextFont(kFontGeneva);
+    TextSize(kSettingsNoteSize);
+    TextFace(normal);
+    RGBForeColor(&noteGrey);
+
+    MoveTo(kSettingsNoteLeft, kSettingsNoteBaseline1);
+    DrawString("\phttps only. Certificate checking stops at Google Trust Services;");
+    MoveTo(kSettingsNoteLeft, kSettingsNoteBaseline2);
+    DrawString("\pother hosts need it turned off.");
+
+    SetPenState(&savePen);
+    RGBForeColor(&saveFore);
+    TextFont(saveFont);
+    TextSize(saveSize);
+    TextFace(saveFace);
+    SetPort(savePort);
+}
+
+/* Copy a C string into a bounded buffer. */
+static void CopyCString(char *out, short max, const char *text)
+{
+    short len = 0;
+
+    if (out == NULL || max <= 0) {
+        return;
+    }
+
+    while (text != NULL && text[len] != '\0' && len < (short)(max - 1)) {
+        out[len] = text[len];
+        len++;
+    }
+    out[len] = '\0';
+}
 
 /* Replace the text of an editable dialog item.
  *
@@ -114,29 +176,13 @@ static void GetItemCString(DialogPtr dialog, short item, char *out, short outSiz
     out[len] = '\0';
 }
 
-/* Case-insensitive comparison of an ASCII field against a lowercase name */
-static Boolean ProviderIs(const char *text, const char *name)
-{
-    while (*text != '\0' && *name != '\0') {
-        char c = *text++;
-
-        if (c >= 'A' && c <= 'Z') {
-            c = (char)(c + ('a' - 'A'));
-        }
-        if (c != *name++) {
-            return false;
-        }
-    }
-
-    return *text == '\0' && *name == '\0';
-}
-
 /* Show the modal settings dialog and persist the result */
 static void ShowSettingsDialog(void)
 {
     DialogPtr dialog;
     GrafPtr savePort;
     char value[128];
+    char originalModel[128];
     short item;
     Boolean accepted = false;
 
@@ -151,14 +197,16 @@ static void ShowSettingsDialog(void)
 
     SetPort(dialog);
 
-    ParamText("\pProvider (anthropic or openai):", "\pModel:", "\pAPI key:",
-              "\pBase URL (empty = default):");
+    ParamText("\pProvider:", "\pModel:", "\pAPI key:",
+              "\pBase URL (empty = provider default):");
 
-    SetItemCString(dialog, kSettingsProviderEdit,
-                   API_GetProvider() == kProviderOpenAI ? "openai" : "anthropic");
+    SetItemCString(dialog, kSettingsProviderEdit, API_ProviderName(API_GetProvider()));
     SetItemCString(dialog, kSettingsModelEdit, API_GetModel());
     SetItemCString(dialog, kSettingsKeyEdit, API_GetAPIKey());
     SetItemCString(dialog, kSettingsURLEdit, API_GetBaseURL());
+
+    /* What the field started with decides whether the user edited the model */
+    GetItemCString(dialog, kSettingsModelEdit, originalModel, (short)sizeof(originalModel));
 
     ShowWindow(dialog);
     SetDialogDefaultItem(dialog, kSettingsOK);
@@ -166,6 +214,10 @@ static void ShowSettingsDialog(void)
 
     for (;;) {
         ModalDialog(NULL, &item);
+
+        /* The dialog's own update erases user items, so the small print is
+           painted after each step rather than once. */
+        DrawSettingsNote(dialog);
 
         if (item == kSettingsOK) {
             accepted = true;
@@ -177,17 +229,32 @@ static void ShowSettingsDialog(void)
     }
 
     if (accepted) {
+        APIProvider provider;
+
         GetItemCString(dialog, kSettingsProviderEdit, value, (short)sizeof(value));
-        if (ProviderIs(value, "anthropic")) {
-            API_SetProvider(kProviderAnthropic);
-        }
-        else if (ProviderIs(value, "openai")) {
-            API_SetProvider(kProviderOpenAI);
+        if (API_ProviderFromName(value, &provider)) {
+            API_SetProvider(provider);
         }
         /* Anything else keeps the previous provider */
 
+        /* Switching provider can adopt that provider's default model. Only a
+           model the user really edited may override it. */
         GetItemCString(dialog, kSettingsModelEdit, value, (short)sizeof(value));
+        if (value[0] == '\0' || strcmp(value, originalModel) == 0) {
+            CopyCString(value, (short)sizeof(value), API_GetModel());
+        }
         API_SetModel(value);
+
+        /* Leave the field showing the model that will actually be used */
+        if (strcmp(value, originalModel) != 0) {
+            Rect modelRect;
+            Handle modelHandle;
+            short modelType;
+
+            SetItemCString(dialog, kSettingsModelEdit, value);
+            GetDialogItem(dialog, kSettingsModelEdit, &modelType, &modelHandle, &modelRect);
+            InvalRect(&modelRect);
+        }
 
         GetItemCString(dialog, kSettingsKeyEdit, value, (short)sizeof(value));
         API_SetAPIKey(value);

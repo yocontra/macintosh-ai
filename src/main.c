@@ -13,6 +13,7 @@
 #include "chatbot/api_client.h"
 #include "constants.h"
 #include "error.h"
+#include "selftest.h"
 #include "prefs.h"
 #include "sound/beepbop.h"
 #include "ui/chat_window.h"
@@ -111,6 +112,12 @@ int main(void)
         if (GetCurrentProcess(&psn) == noErr) {
             SetFrontProcess(&psn);
         }
+    }
+
+    /* A harness can ask the app to exercise itself and quit; see selftest.c.
+       This costs one file lookup when it has not asked. */
+    if (SelfTest_Requested()) {
+        SelfTest_Run(); /* does not return */
     }
 
     /*----------------------------------------

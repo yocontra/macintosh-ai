@@ -134,10 +134,18 @@ translation units stay on Retro68's Multiversal headers.
 
 ## Trust store and known limitations
 
-- The trust anchor is the Google Trust Services **WE1** intermediate,
-  pinned in `net/RootCert.cpp` so only one P-256 signature is ever
-  computed for the chain (the P-384 root check does not fit the timeout).
-  `kGoogleWE1_DER` expires **2029-02-20**.
+- The trust anchors are the Google Trust Services **WE1** and **WE2**
+  intermediates, pinned in `net/RootCert.cpp` so only one P-256 signature is
+  ever computed for the chain (the P-384 root check does not fit the timeout).
+  `WE1` signs `api.anthropic.com`, `api.openai.com` and `openrouter.ai`;
+  `WE2` signs the `*.googleapis.com` endpoints (Gemini). Both expire
+  **2029-02-20**.
+- **This file was modified**: `HttpClient.cpp` gained one
+  `mbedtls_x509_crt_parse_der` call for WE2, and `RootCert.{cpp,h}` gained the
+  WE2 DER blob. Everything else in `HttpClient.cpp` is upstream's.
+- Hosts outside those two chains - any other OpenAI-compatible server - cannot
+  be verified with this trust store; the application exposes a
+  certificate-checking switch for exactly that case, and says so in the UI.
 - Certificate **dates are not checked**: `MBEDTLS_HAVE_TIME_DATE` is off.
 - There is **no revocation checking**.
 - `libmbed*.a` were built by upstream for this toolchain. If they ever
