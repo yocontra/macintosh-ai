@@ -245,3 +245,29 @@ next person does not rediscover them.
   when the window is key and without it otherwise, so `driver.py` derives the
   scale and the title-bar offset from the image it actually got instead of
   assuming 28 px.
+
+## Open issue: menu tracking under SheepShaver
+
+`02-settings` and `03-no-key` are not green on this machine, and the reason is
+in the harness, not (as far as I could establish) in the app:
+
+- A plain click cannot operate a Mac menu. `MenuSelect` runs its own tracking
+  loop: the menu opens on mouse-down and closes on mouse-up, so a down+up on
+  the title opens and immediately dismisses the menu without selecting an item.
+  `driver.py` now has a `menu <title-x> <title-y> <item-x> <item-y>` command
+  that presses on the title, drags to the item and releases there.
+- With that, the guest leaves the menu title highlighted and never draws the
+  drop-down, i.e. `MenuSelect` appears to be waiting for a mouse-up that
+  `CGEventPost` already delivered. Whatever is dropped there, the result is
+  that no application menu can be driven from this harness yet.
+- Cmd-, reaches the app as a key event but `MenuKey` does not match it, so the
+  keyboard equivalent is not a workaround either.
+
+What is nevertheless established: the splash renders (01-launch, recorded and
+re-run at 0.0000 difference), the app brings itself to the front on launch, its
+menu bar shows File/Models/Extras/Help, and the settings dialog has been seen
+drawn with the persisted model in its field.
+
+Fixing this needs a mouse-up that the guest's MenuSelect actually consumes —
+likely a `CGEventPost` at `kCGSessionEventTap` instead of `kCGHIDEventTap`, or
+`ToScreenCoordinates`-consistent dragging. Recorded here rather than guessed at.

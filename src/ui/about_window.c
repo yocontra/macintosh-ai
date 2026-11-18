@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include "../constants.h"
+#include "utils.h"
 #include "../error.h"
 #include "about_window.h"
 
@@ -33,7 +34,7 @@ void AboutWindow_Show(void)
 
     SetPort(dialog);
 
-    CopyCStringToPascal(APP_VERSION_STR, version);
+    CStrToPStr(APP_VERSION_STR, version);
     ParamText(version, "\p", "\p", "\p");
 
     ShowWindow(dialog);

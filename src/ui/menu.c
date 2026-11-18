@@ -10,6 +10,7 @@
 #include "../chatbot/api_client.h"
 #include "../chatbot/model_manager.h"
 #include "../constants.h"
+#include "utils.h"
 #include "../error.h"
 #include "../sound/tetris.h"
 #include "about_window.h"
@@ -34,7 +35,11 @@ enum {
     kSettingsCancel       = 10
 };
 
-/* Replace the text of an editable dialog item */
+/* Replace the text of an editable dialog item.
+ *
+ * An EditText item's handle is a TEHandle, not a text handle: SetDialogItemText
+ * on it writes a Pascal string over the TERec header and corrupts the heap.
+ * TextEdit owns that text, so it has to be set through TextEdit. */
 static void SetItemCString(DialogPtr dialog, short item, const char *text)
 {
     Rect itemRect;
@@ -43,7 +48,23 @@ static void SetItemCString(DialogPtr dialog, short item, const char *text)
     Str255 p;
 
     GetDialogItem(dialog, item, &itemType, &itemHandle, &itemRect);
-    CopyCStringToPascal(text != NULL ? text : "", p);
+
+    if ((itemType & editText) != 0 && itemHandle != NULL) {
+        TEHandle te = (TEHandle)itemHandle;
+        short len = 0;
+
+        if (text != NULL) {
+            while (text[len] != '\0' && len < 255) {
+                len++;
+            }
+        }
+
+        TESetText((Ptr)text, len, te);
+        TEUpdate(&itemRect, te);
+        return;
+    }
+
+    CStrToPStr(text != NULL ? text : "", p);
     SetDialogItemText(itemHandle, p);
 }
 
@@ -63,11 +84,30 @@ static void GetItemCString(DialogPtr dialog, short item, char *out, short outSiz
     out[0] = '\0';
 
     GetDialogItem(dialog, item, &itemType, &itemHandle, &itemRect);
+
+    if ((itemType & editText) != 0 && itemHandle != NULL) {
+        TEHandle te = (TEHandle)itemHandle;
+
+        if (te == NULL || *te == NULL || (*te)->hText == NULL) {
+            return;
+        }
+
+        len = (*te)->teLength;
+        if (len > (short)(outSize - 1)) {
+            len = (short)(outSize - 1);
+        }
+        if (len > 0) {
+            BlockMoveData(*(*te)->hText, out, (Size)len);
+        }
+        out[len] = '\0';
+        return;
+    }
+
     GetDialogItemText(itemHandle, p);
 
     len = p[0];
-    if (len > outSize - 1) {
-        len = outSize - 1;
+    if (len > (short)(outSize - 1)) {
+        len = (short)(outSize - 1);
     }
 
     memcpy(out, p + 1, (size_t)len);

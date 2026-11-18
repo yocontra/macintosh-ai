@@ -214,3 +214,22 @@ void ConvertToLowercase(char *str)
         str++;
     }
 }
+/* Copy a C string into a Pascal string, truncating to 255 characters. */
+void CStrToPStr(const char *cstr, Str255 pstr)
+{
+    short len = 0;
+
+    if (pstr == NULL) {
+        return;
+    }
+
+    if (cstr != NULL) {
+        while (cstr[len] != '\0' && len < 255) {
+            len++;
+        }
+        if (len > 0) {
+            BlockMoveData(cstr, pstr + 1, (Size)len);
+        }
+    }
+    pstr[0] = (unsigned char)len;
+}

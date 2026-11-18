@@ -390,6 +390,52 @@ def check_input_works() -> None:
         raise HarnessError("CGEventPost has no effect -- " + TCC_MESSAGE, 2)
 
 
+def _post_mouse(kind: str, gx: float, gy: float) -> None:
+    """Post one mouse event (down/dragged/up/moved) at a guest coordinate."""
+    require_modules()
+    win = wait_window(1.0)
+    host_x, host_y = guest_to_host(win, gx, gy)
+    pt = (host_x, host_y)
+    kinds = {
+        "down": Quartz.kCGEventLeftMouseDown,
+        "dragged": Quartz.kCGEventLeftMouseDragged,
+        "up": Quartz.kCGEventLeftMouseUp,
+        "moved": Quartz.kCGEventMouseMoved,
+    }
+    event = Quartz.CGEventCreateMouseEvent(
+        None, kinds[kind], pt, Quartz.kCGMouseButtonLeft
+    )
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+
+
+def menu_select(title_xy, item_xy) -> None:
+    """Choose a menu item the way a Mac expects: press on the title, drag to the
+    item, release there.
+
+    A plain click cannot do this. MenuSelect runs its own tracking loop: the
+    menu opens on mouse-down and closes on mouse-up, so a down+up at the title
+    opens and immediately dismisses the menu without selecting anything.
+    """
+    require_modules()
+    activate_emulator()
+    _post_mouse("moved", title_xy[0], title_xy[1])
+    time.sleep(0.05)
+    _post_mouse("down", title_xy[0], title_xy[1])
+    time.sleep(0.15)
+    # A couple of intermediate drags so the guest sees the highlight move.
+    steps = 5
+    for i in range(1, steps + 1):
+        gx = title_xy[0] + (item_xy[0] - title_xy[0]) * i / steps
+        gy = title_xy[1] + (item_xy[1] - title_xy[1]) * i / steps
+        _post_mouse("dragged", gx, gy)
+        time.sleep(0.03)
+    time.sleep(0.1)
+    _post_mouse("dragged", item_xy[0], item_xy[1])
+    time.sleep(0.05)
+    _post_mouse("up", item_xy[0], item_xy[1])
+    time.sleep(0.1)
+
+
 def click_guest(gx: float, gy: float, count: int = 1, shift: bool = False) -> None:
     require_modules()
     activate_emulator()
@@ -866,6 +912,11 @@ def cmd_shot(args) -> int:
     return 0
 
 
+def cmd_menu(args) -> int:
+    menu_select((args.tx, args.ty), (args.ix, args.iy))
+    return 0
+
+
 def cmd_click(args) -> int:
     if args.name:
         gx, gy = point(args.name)
@@ -982,6 +1033,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--region", default="full")
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_shot)
+
+    p = sub.add_parser("menu", help="choose a menu item: <title-x> <title-y> <item-x> <item-y>")
+    p.add_argument("tx", type=int)
+    p.add_argument("ty", type=int)
+    p.add_argument("ix", type=int)
+    p.add_argument("iy", type=int)
+    p.set_defaults(func=cmd_menu)
 
     p = sub.add_parser("click", help="click guest coordinates")
     p.add_argument("x", type=int, nargs="?")

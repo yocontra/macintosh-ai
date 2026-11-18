@@ -32,4 +32,7 @@ void TrimWhitespace(char *str);
 /* Convert a string to lowercase (modifies the string in place) */
 void ConvertToLowercase(char *str);
 
+/* Copy a C string into a Pascal string (max 255 characters). */
+void CStrToPStr(const char *cstr, Str255 pstr);
+
 #endif /* UTILS_H */
