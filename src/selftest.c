@@ -89,10 +89,17 @@ static void LogRaw(const char *text)
     }
     SetFPos(sLogRef, fsFromLEOF, 0);
     FSWrite(sLogRef, &count, (Ptr)text);
-    /* The harness kills the VM and then mounts the clone, so the data has to
-     * be on the volume, not only in the guest's cache. maccraft's log survived
-     * without this because it fits in one allocation block. */
-    FlushVol(NULL, 0);
+
+    /* The harness kills the VM and then mounts the clone, so the bytes have to
+     * be on the volume, not only in the guest's cache. FlushVol on its own left
+     * the log a run of zero bytes; flushing this file's own blocks does it. */
+    {
+        ParamBlockRec pb;
+
+        memset(&pb, 0, sizeof(pb));
+        pb.ioParam.ioRefNum = sLogRef;
+        PBFlushFileSync((ParmBlkPtr)&pb);
+    }
 }
 
 static char *AppendStr(char *p, const char *text)
@@ -258,9 +265,7 @@ void SelfTest_Run(void)
     LogLine("done", NULL, NULL, 0, false);
     CloseLog();
 
-    /* Push the log out to the volume before the process goes away: the harness
-     * reads it from the clone after SheepShaver is killed, and the guest's own
-     * cache would otherwise not be written back. */
+    /* Last chance to get the bytes onto the volume before the process goes. */
     FlushVol(NULL, 0);
 
     API_Shutdown();
