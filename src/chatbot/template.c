@@ -49,6 +49,10 @@ void AddTemplate(const char *response, unsigned char category, const char **patt
     if (gTemplateCount >= MAX_TEMPLATES)
         return;
 
+    /* Reject pattern lists that cannot fit rather than silently truncating */
+    if (patternCount < 0 || patternCount > MAX_PATTERNS)
+        return;
+
     /* Add the template */
     strncpy(gTemplates[gTemplateCount].response, response, MAX_TEMPLATE_LENGTH - 1);
     gTemplates[gTemplateCount].response[MAX_TEMPLATE_LENGTH - 1] = '\0';
@@ -206,6 +210,23 @@ static Boolean PatternMatches(const char *pattern, const char *text)
     return (strstr(textLower, patternLower) != NULL);
 }
 
+/* Check whether a token exactly matches one of the technical key topics.
+   Substring matching here would boost unrelated tokens like "int" or "ram". */
+static Boolean IsKeyTopic(const char *token)
+{
+    static const char *const kTopics[] = {"mac",     "macintosh", "system",   "file",    "disk",
+                                          "memory",  "error",     "help",     "app",     "window",
+                                          "program", "software",  "problem",  "computer", "network"};
+    short i;
+
+    for (i = 0; i < (short)(sizeof(kTopics) / sizeof(kTopics[0])); i++) {
+        if (strcmp(token, kTopics[i]) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 /* Extract keywords from user input for more contextual responses */
 static void ExtractKeywords(const char *input, ExtractedKeyword *keywords, short *keywordCount)
 {
@@ -296,14 +317,19 @@ static void ExtractKeywords(const char *input, ExtractedKeyword *keywords, short
             strncpy(keywords[count].keyword, tokenLower, MAX_PATTERN_LENGTH - 1);
             keywords[count].keyword[MAX_PATTERN_LENGTH - 1] = '\0';
 
-            /* Assign importance based on length and other factors */
-            keywords[count].importance = 50 + (strlen(tokenLower) * 5);
+            /* Assign importance based on length and other factors. The score is
+               computed in a short and clamped so it cannot wrap the byte. */
+            {
+                short importance = 50 + ((short)strlen(tokenLower) * 5);
 
-            /* Increase importance for technical and specific terms */
-            if (strstr("mac|macintosh|system|file|disk|memory|error|help|app|window|program|"
-                       "software|problem|computer|network",
-                       tokenLower)) {
-                keywords[count].importance += 50;
+                /* Increase importance for technical and specific terms */
+                if (IsKeyTopic(tokenLower))
+                    importance += 50;
+
+                if (importance > 255)
+                    importance = 255;
+
+                keywords[count].importance = (unsigned char)importance;
             }
 
             count++;
@@ -377,16 +403,40 @@ static short FindBestTemplate(const char *userInput, const ExtractedKeyword *key
     return bestIndex;
 }
 
+/* Copy src into *dst, stopping at end. *dst never advances past end. */
+static void CopyTo(char **dst, char *end, const char *src)
+{
+    while (*src != '\0' && *dst < end) {
+        *(*dst)++ = *src++;
+    }
+}
+
+/* Copy src into dst with an explicit capacity, always NUL terminating. */
+static void CopyBounded(char *dst, short cap, const char *src)
+{
+    short i = 0;
+
+    if (cap <= 0)
+        return;
+
+    while (src[i] != '\0' && i < cap - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
 /* Fill template slots with keywords from user input */
-static void FillTemplate(char *response, const char *templateText, const ExtractedKeyword *keywords,
-                         short keywordCount)
+static void FillTemplate(char *response, short responseCap, const char *templateText,
+                         const ExtractedKeyword *keywords, short keywordCount)
 {
     const char *src = templateText;
     char *dst       = response;
+    char *end       = response + responseCap - 1; /* last writable byte */
     short keywordIndex;
     Boolean isFirstChar = true; /* Track if we're at the first character of the response */
 
-    while (*src && (dst - response) < kMaxPromptLength - 1) {
+    while (*src != '\0' && dst < end) {
         if (*src == '{' && *(src + 1) == '{') {
             /* Found a template slot */
             src += 2; /* Skip {{ */
@@ -411,39 +461,27 @@ static void FillTemplate(char *response, const char *templateText, const Extract
                     src++; /* Skip second } */
 
                 /* Insert the keyword if available */
-                if (keywordIndex < keywordCount) {
+                if (keywordIndex < keywordCount && keywords[keywordIndex].keyword[0] != '\0') {
                     /* If this is the first character of the response, capitalize the keyword */
-                    if (isFirstChar && keywords[keywordIndex].keyword[0] != '\0') {
-                        /* Copy first character uppercase */
-                        if (keywords[keywordIndex].keyword[0] >= 'a' &&
-                            keywords[keywordIndex].keyword[0] <= 'z') {
-                            *dst++ =
-                                keywords[keywordIndex].keyword[0] - 32; /* Convert to uppercase */
-                        }
-                        else {
-                            *dst++ = keywords[keywordIndex]
-                                         .keyword[0]; /* Already uppercase or non-alpha */
-                        }
-                        /* Copy the rest of the keyword */
-                        strcpy(dst, keywords[keywordIndex].keyword + 1);
-                        dst += strlen(keywords[keywordIndex].keyword) - 1;
+                    if (isFirstChar) {
+                        char first = keywords[keywordIndex].keyword[0];
+
+                        if (first >= 'a' && first <= 'z')
+                            first -= 32; /* Convert to uppercase */
+
+                        if (dst < end)
+                            *dst++ = first;
+                        CopyTo(&dst, end, keywords[keywordIndex].keyword + 1);
                         isFirstChar = false;
                     }
                     else {
-                        strcpy(dst, keywords[keywordIndex].keyword);
-                        dst += strlen(keywords[keywordIndex].keyword);
+                        CopyTo(&dst, end, keywords[keywordIndex].keyword);
                     }
                 }
                 else {
                     /* No keyword available, insert placeholder */
-                    if (isFirstChar) {
-                        strcpy(dst, "That"); /* Capitalized */
-                        isFirstChar = false;
-                    }
-                    else {
-                        strcpy(dst, "that");
-                    }
-                    dst += 4;
+                    CopyTo(&dst, end, isFirstChar ? "That" : "that");
+                    isFirstChar = false;
                 }
             }
             else if (strncmp(src, "time", 4) == 0) {
@@ -454,8 +492,7 @@ static void FillTemplate(char *response, const char *templateText, const Extract
                 GetTime(&dateTime);
                 sprintf(timeStr, "%d:%02d", dateTime.hour, dateTime.minute);
 
-                strcpy(dst, timeStr);
-                dst += strlen(timeStr);
+                CopyTo(&dst, end, timeStr);
                 isFirstChar = false;
 
                 /* Skip to end of slot marker */
@@ -478,8 +515,7 @@ static void FillTemplate(char *response, const char *templateText, const Extract
                 sprintf(dateStr, "%s %d, %d", monthNames[dateTime.month - 1], dateTime.day,
                         dateTime.year);
 
-                strcpy(dst, dateStr);
-                dst += strlen(dateStr);
+                CopyTo(&dst, end, dateStr);
                 isFirstChar = false;
 
                 /* Skip to end of slot marker */
@@ -502,17 +538,14 @@ static void FillTemplate(char *response, const char *templateText, const Extract
         }
         else {
             /* Regular character, copy it */
-            if (isFirstChar && *src >= 'a' && *src <= 'z') {
-                /* Capitalize first character of the response */
-                *dst++      = *src - 32; /* Convert to uppercase */
-                isFirstChar = false;
-            }
-            else {
-                *dst++ = *src;
-                if (isFirstChar) {
-                    isFirstChar = false;
-                }
-            }
+            char c = *src;
+
+            if (isFirstChar && c >= 'a' && c <= 'z')
+                c -= 32; /* Capitalize first character of the response */
+
+            if (dst < end)
+                *dst++ = c;
+            isFirstChar = false;
             src++;
         }
     }
@@ -547,7 +580,7 @@ char *GenerateTemplateResponse(const ConversationHistory *history)
     const char *userMessage = NULL;
 
     /* Initialize with default response in case something goes wrong */
-    strcpy(response, "I'm thinking about how to respond...");
+    CopyBounded(response, (short)sizeof(response), "I'm thinking about how to respond...");
 
     /* Check history is valid and get last user message */
     if (history != NULL && history->count > 0) {
@@ -569,7 +602,8 @@ char *GenerateTemplateResponse(const ConversationHistory *history)
 
             if (templateIndex >= 0) {
                 /* Fill the template with keywords from user input */
-                FillTemplate(response, gTemplates[templateIndex].response, keywords, keywordCount);
+                FillTemplate(response, (short)sizeof(response), gTemplates[templateIndex].response,
+                             keywords, keywordCount);
             }
 
             return response;
@@ -577,6 +611,7 @@ char *GenerateTemplateResponse(const ConversationHistory *history)
     }
 
     /* Fallback response if no user message found */
-    strcpy(response, "Hello! I'm your Macintosh AI assistant. How can I help you today?");
+    CopyBounded(response, (short)sizeof(response),
+                "Hello! I'm your Macintosh AI assistant. How can I help you today?");
     return response;
 }

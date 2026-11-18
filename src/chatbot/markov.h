@@ -11,8 +11,8 @@ typedef enum { kUserMessage = 0, kAIMessage = 1 } MessageType;
 
 /* Structure for a single message in the conversation */
 typedef struct {
-    MessageType type;            /* Who sent the message */
-    char text[kMaxPromptLength]; /* Content of the message */
+    MessageType type;                     /* Who sent the message */
+    char text[kMaxConversationText];      /* Content of the message */
 } ConversationMessage;
 
 /* Structure for the entire conversation history using a circular buffer */

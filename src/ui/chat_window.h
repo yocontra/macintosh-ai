@@ -5,8 +5,9 @@
 #include <TextEdit.h>
 #include <Windows.h>
 
-/* Initialize and create the chat window */
-void ChatWindow_Initialize(void);
+/* Initialize and create the chat window. Returns false if the window or its
+   text fields could not be created. */
+Boolean ChatWindow_Initialize(void);
 
 /* Dispose of the chat window and clean up resources */
 void ChatWindow_Dispose(void);
@@ -39,8 +40,8 @@ void ChatWindow_ClearText(void);
 /* Get the window reference for the chat window */
 WindowRef ChatWindow_GetWindowRef(void);
 
-/* Show or hide the chat window */
-void ChatWindow_Show(Boolean visible);
+/* Show or hide the chat window. Returns false if it could not be shown. */
+Boolean ChatWindow_Show(Boolean visible);
 
 /* Determine if the window is visible */
 Boolean ChatWindow_IsVisible(void);

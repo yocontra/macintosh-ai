@@ -11,10 +11,13 @@
 #include "markov_data.h"
 
 /* Markov chain data structure with bigram model (state_size=2) */
-#define MAX_WORDS 384       /* Reduced to make room for more data per word */
-#define MAX_FOLLOWERS 8     /* Reduced to make room for frequencies */
-#define MAX_WORD_LENGTH 24  /* Reduced slightly to save memory */
-#define MAX_STATE_LENGTH 48 /* For state (two words) */
+/* The static corpus in markov_data.c yields 5442 distinct bigram states
+   (measured with a host program); the dynamic system-data sentences add
+   fewer than 100 more. MAX_WORDS leaves headroom so training never stops. */
+#define MAX_WORDS 5632      /* 5632 * 144 bytes = 792 KB static */
+#define MAX_FOLLOWERS 4     /* Corpus averages ~1.9 followers per state */
+#define MAX_WORD_LENGTH 24  /* Longest corpus word is 23 characters + NUL */
+#define MAX_STATE_LENGTH 40 /* Longest corpus state is 33 characters + NUL */
 
 /* New: Weighted followers to improve text quality */
 typedef struct {
@@ -27,14 +30,55 @@ typedef struct {
     WeightedFollower followers[MAX_FOLLOWERS];
     unsigned char followerCount;
     unsigned char isStartOfSentence : 1; /* Flag for sentence starters */
+    short nextInBucket;                  /* Next state in the same hash bucket, -1 ends */
 } MarkovNode;
+
+/* Bucket heads for the state hash table. Training the full corpus is only
+   affordable with hashed lookup; the bucket chain keeps chains ~5 entries. */
+#define HASH_BUCKETS 1024
 
 /* Global Markov chain data */
 static MarkovNode gMarkovChain[MAX_WORDS];
+static short gHashBuckets[HASH_BUCKETS];
 static short gMarkovNodeCount = 0;
 
 /* Global random seed */
 static unsigned long gRandomSeed = 1;
+
+/* Copy src into dst, never writing past dst[cap - 1]. Always NUL terminates. */
+static void CopyBounded(char *dst, short cap, const char *src)
+{
+    short i = 0;
+
+    if (cap <= 0)
+        return;
+
+    while (src[i] != '\0' && i < cap - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+/* Append src to the NUL-terminated dst, never writing past dst[cap - 1].
+   Returns the resulting length so callers can track the remaining space. */
+static short AppendBounded(char *dst, short cap, const char *src)
+{
+    short len = (short)strlen(dst);
+    short i   = 0;
+
+    if (cap <= 0)
+        return 0;
+
+    if (len > cap - 1)
+        len = cap - 1;
+
+    while (src[i] != '\0' && len < cap - 1) {
+        dst[len++] = src[i++];
+    }
+    dst[len] = '\0';
+    return len;
+}
 
 /* Custom random number generator - named differently to avoid conflicts */
 static unsigned long RandomGen(void)
@@ -54,32 +98,26 @@ static void InitRandom(void)
     gRandomSeed = (dateTime.hour * 3600) + (dateTime.minute * 60) + dateTime.second + dateTime.year;
 }
 
-/* Hash function for faster state lookup */
+/* Hash function for state lookup */
 static unsigned short HashString(const char *state)
 {
     unsigned short hash = 0;
     while (*state) {
         hash = (hash * 31) + *state++;
     }
-    return hash % MAX_WORDS;
+    return hash;
 }
 
 /* Find a state in the Markov chain, returns index or -1 if not found */
 static short FindStateInChain(const char *state)
 {
-    /* Start search at the hash position for better performance */
-    short startIdx = HashString(state);
     short i;
 
-    /* First search from hash position to end */
-    for (i = startIdx; i < gMarkovNodeCount; i++) {
-        if (strcmp(gMarkovChain[i].state, state) == 0) {
-            return i;
-        }
-    }
+    if (gMarkovNodeCount <= 0)
+        return -1;
 
-    /* Then search from beginning to hash position if needed */
-    for (i = 0; i < startIdx && i < gMarkovNodeCount; i++) {
+    for (i = gHashBuckets[HashString(state) % HASH_BUCKETS]; i >= 0;
+         i = gMarkovChain[i].nextInBucket) {
         if (strcmp(gMarkovChain[i].state, state) == 0) {
             return i;
         }
@@ -92,11 +130,18 @@ static short FindStateInChain(const char *state)
 static short AddStateToChain(const char *state, Boolean isStart)
 {
     if (gMarkovNodeCount < MAX_WORDS) {
-        strncpy(gMarkovChain[gMarkovNodeCount].state, state, MAX_STATE_LENGTH - 1);
-        gMarkovChain[gMarkovNodeCount].state[MAX_STATE_LENGTH - 1] = '\0';
-        gMarkovChain[gMarkovNodeCount].followerCount               = 0;
-        gMarkovChain[gMarkovNodeCount].isStartOfSentence           = isStart;
-        return gMarkovNodeCount++;
+        unsigned short bucket = HashString(state) % HASH_BUCKETS;
+        short index           = gMarkovNodeCount;
+
+        strncpy(gMarkovChain[index].state, state, MAX_STATE_LENGTH - 1);
+        gMarkovChain[index].state[MAX_STATE_LENGTH - 1] = '\0';
+        gMarkovChain[index].followerCount               = 0;
+        gMarkovChain[index].isStartOfSentence           = isStart;
+        gMarkovChain[index].nextInBucket                = gHashBuckets[bucket];
+        gHashBuckets[bucket]                            = index;
+
+        gMarkovNodeCount++;
+        return index;
     }
     return -1; /* Chain is full */
 }
@@ -143,11 +188,11 @@ static Boolean IsSentenceEnder(char c)
 }
 
 /* Helper function to combine two words into a state */
-static void MakeState(const char *word1, const char *word2, char *state_buffer)
+static void MakeState(const char *word1, const char *word2, char *state_buffer, short destSize)
 {
-    strcpy(state_buffer, word1);
-    strcat(state_buffer, " ");
-    strcat(state_buffer, word2);
+    CopyBounded(state_buffer, destSize, word1);
+    AppendBounded(state_buffer, destSize, " ");
+    AppendBounded(state_buffer, destSize, word2);
 }
 
 /* Clean and check if word ends a sentence */
@@ -205,7 +250,7 @@ void TrainMarkov(const char *text)
         return;
 
     /* Create the first state (word1 + word2) and find or add it */
-    MakeState(word1, word2, state_buffer);
+    MakeState(word1, word2, state_buffer, sizeof(state_buffer));
     stateIndex = FindStateInChain(state_buffer);
 
     if (stateIndex < 0) {
@@ -233,7 +278,7 @@ void TrainMarkov(const char *text)
         AddFollower(stateIndex, word3);
 
         /* Create and add the new state (word2 + word3) */
-        MakeState(word2, word3, state_buffer);
+        MakeState(word2, word3, state_buffer, sizeof(state_buffer));
         newStateIndex = FindStateInChain(state_buffer);
 
         if (newStateIndex < 0) {
@@ -257,7 +302,11 @@ void TrainMarkov(const char *text)
 /* Initialize the Markov chain with data from markov_data.c */
 static void InitMarkovChain(void)
 {
+    short i;
+
     gMarkovNodeCount = 0;
+    for (i = 0; i < HASH_BUCKETS; i++)
+        gHashBuckets[i] = -1;
 
     /* Training data is provided in markov_data.c */
     LoadTrainingData();
@@ -293,15 +342,16 @@ static short SelectWeightedFollower(const MarkovNode *node)
 }
 
 /* Extract second word from a state */
-static void GetSecondWord(const char *state, char *word)
+static void GetSecondWord(const char *state, char *word, short destSize)
 {
     const char *space = strchr(state, ' ');
+
     if (space) {
-        strcpy(word, space + 1);
+        CopyBounded(word, destSize, space + 1);
     }
     else {
         /* Fallback if no space found */
-        strcpy(word, state);
+        CopyBounded(word, destSize, state);
     }
 }
 
@@ -311,14 +361,22 @@ static void GenerateMarkovText(char *response, short maxLength)
     char current_state[MAX_STATE_LENGTH];
     char next_word[MAX_WORD_LENGTH];
     char next_state[MAX_STATE_LENGTH];
+    char second_word[MAX_WORD_LENGTH];
     short stateIndex, followerIndex;
     short wordCount      = 0;
     short sentenceCount  = 0;
     short sentenceTarget = (RandomGen() % 2) + 1; /* 1-2 sentences */
+    short cap;
+    short attempts;
+
+    /* Never write past the caller's buffer, whatever the requested length */
+    if (maxLength <= 0)
+        return;
+    cap = (maxLength > kMaxResponseLength) ? (short)kMaxResponseLength : maxLength;
 
     /* Start with a random state from the chain */
     if (gMarkovNodeCount == 0) {
-        strcpy(response, "I don't have enough information yet.");
+        CopyBounded(response, cap, "I don't have enough information yet.");
         return;
     }
 
@@ -326,34 +384,38 @@ static void GenerateMarkovText(char *response, short maxLength)
     response[0] = '\0';
 
     /* Pick a starter state (preferably one that starts a sentence) */
-    short attempts = 0;
+    attempts = 0;
     do {
         stateIndex = RandomGen() % gMarkovNodeCount;
         attempts++;
     } while (!gMarkovChain[stateIndex].isStartOfSentence && attempts < 20);
 
     /* Add the starting state to the response */
-    strcpy(current_state, gMarkovChain[stateIndex].state);
-    strcat(response, current_state);
+    CopyBounded(current_state, sizeof(current_state), gMarkovChain[stateIndex].state);
+    AppendBounded(response, cap, current_state);
     wordCount += 2; /* State has two words */
 
-    /* Generate the response */
-    while (strlen(response) < maxLength - MAX_WORD_LENGTH && sentenceCount < sentenceTarget) {
+    /* Generate the response. Every append is bounded by cap, and the guard
+       below leaves room for a whole state plus punctuation. */
+    while ((short)strlen(response) + MAX_STATE_LENGTH + 2 < cap &&
+           sentenceCount < sentenceTarget) {
         /* Try to find the current state in the chain */
         stateIndex = FindStateInChain(current_state);
 
         if (stateIndex < 0 || gMarkovChain[stateIndex].followerCount == 0) {
             /* State not found or has no followers */
-            strcat(response, ". "); /* End the sentence */
+            AppendBounded(response, cap, ". "); /* End the sentence */
             sentenceCount++;
 
             /* Pick a new sentence starter state */
+            attempts = 0;
             do {
                 stateIndex = RandomGen() % gMarkovNodeCount;
+                attempts++;
             } while (!gMarkovChain[stateIndex].isStartOfSentence && attempts < 10);
 
-            strcpy(current_state, gMarkovChain[stateIndex].state);
-            strcat(response, current_state);
+            CopyBounded(current_state, sizeof(current_state), gMarkovChain[stateIndex].state);
+            AppendBounded(response, cap, current_state);
             wordCount += 2;
         }
         else {
@@ -362,46 +424,50 @@ static void GenerateMarkovText(char *response, short maxLength)
             if (followerIndex < 0)
                 continue;
 
-            strcpy(next_word, gMarkovChain[stateIndex].followers[followerIndex].word);
+            CopyBounded(next_word, sizeof(next_word),
+                        gMarkovChain[stateIndex].followers[followerIndex].word);
 
             /* Add space and the next word */
-            strcat(response, " ");
-            strcat(response, next_word);
+            AppendBounded(response, cap, " ");
+            AppendBounded(response, cap, next_word);
             wordCount++;
 
             /* Create the next state */
-            char second_word[MAX_WORD_LENGTH];
-            GetSecondWord(current_state, second_word);
-            MakeState(second_word, next_word, next_state);
-            strcpy(current_state, next_state);
+            GetSecondWord(current_state, second_word, sizeof(second_word));
+            MakeState(second_word, next_word, next_state, sizeof(next_state));
+            CopyBounded(current_state, sizeof(current_state), next_state);
 
             /* Check for end of sentence */
             size_t len = strlen(next_word);
             if (len > 0 && IsSentenceEnder(next_word[len - 1])) {
                 sentenceCount++;
                 if (sentenceCount < sentenceTarget) {
-                    strcat(response, " ");
+                    AppendBounded(response, cap, " ");
                 }
             }
         }
 
         /* Avoid exceptionally long sentences */
         if (wordCount > 20 && sentenceCount < sentenceTarget) {
-            short i = strlen(response) - 1;
+            short i        = (short)strlen(response) - 1;
+            short respLen  = (short)strlen(response);
+
             while (i > 0 && !strchr(".!?", response[i]))
                 i--;
 
-            if (i < strlen(response) - 15) { /* If no recent sentence ending */
-                strcat(response, ". ");
+            if (i < respLen - 15) { /* If no recent sentence ending */
+                AppendBounded(response, cap, ". ");
                 sentenceCount++;
 
                 /* Pick a new sentence starter state */
+                attempts = 0;
                 do {
                     stateIndex = RandomGen() % gMarkovNodeCount;
+                    attempts++;
                 } while (!gMarkovChain[stateIndex].isStartOfSentence && attempts < 10);
 
-                strcpy(current_state, gMarkovChain[stateIndex].state);
-                strcat(response, current_state);
+                CopyBounded(current_state, sizeof(current_state), gMarkovChain[stateIndex].state);
+                AppendBounded(response, cap, current_state);
                 wordCount += 2;
             }
         }
@@ -410,7 +476,7 @@ static void GenerateMarkovText(char *response, short maxLength)
     /* Ensure the response ends with proper punctuation */
     size_t len = strlen(response);
     if (len > 0 && !strchr(".!?", response[len - 1])) {
-        strcat(response, ".");
+        AppendBounded(response, cap, ".");
     }
 }
 
@@ -429,17 +495,17 @@ static Boolean ContainsKeyword(const char *state, const char *keyword)
 {
     char stateLower[MAX_STATE_LENGTH];
     char keywordLower[MAX_WORD_LENGTH];
-    char *wordPtr;
     short i;
 
-    /* Convert state to lowercase for case-insensitive matching */
-    for (i = 0; state[i]; i++) {
+    /* Convert state to lowercase for case-insensitive matching.
+       Both sources are truncated to the destination size, never overflowed. */
+    for (i = 0; state[i] != '\0' && i < MAX_STATE_LENGTH - 1; i++) {
         stateLower[i] = (state[i] >= 'A' && state[i] <= 'Z') ? state[i] + 32 : state[i];
     }
     stateLower[i] = '\0';
 
     /* Convert keyword to lowercase */
-    for (i = 0; keyword[i]; i++) {
+    for (i = 0; keyword[i] != '\0' && i < MAX_WORD_LENGTH - 1; i++) {
         keywordLower[i] = (keyword[i] >= 'A' && keyword[i] <= 'Z') ? keyword[i] + 32 : keyword[i];
     }
     keywordLower[i] = '\0';
@@ -454,7 +520,6 @@ static short FindRelevantStartingState(const char *userMessage)
     short i, bestIndex = -1;
     short relevanceScore = 0;
     short bestScore      = 0;
-    char keyword[MAX_WORD_LENGTH];
     char *msgCopy, *token;
     const char *keywords[] = {"science",  "computer", "mac",     "help",  "what",
                               "how",      "why",      "health",  "time",  "digital",
@@ -469,11 +534,14 @@ static short FindRelevantStartingState(const char *userMessage)
     }
 
     /* Make a copy of the user message that we can modify */
-    msgCopy = (char *)NewPtr(strlen(userMessage) + 1);
-    if (!msgCopy) {
-        goto use_random_state;
+    {
+        size_t msgLen = strlen(userMessage);
+        msgCopy       = (char *)NewPtr(msgLen + 1);
+        if (!msgCopy) {
+            goto use_random_state;
+        }
+        memcpy(msgCopy, userMessage, msgLen + 1);
     }
-    strcpy(msgCopy, userMessage);
 
     /* First check for exact matches with the predefined keywords */
     for (i = 0; i < keywordCount; i++) {
@@ -548,14 +616,22 @@ static void GenerateContextualMarkovText(char *response, short maxLength, const 
     char current_state[MAX_STATE_LENGTH];
     char next_word[MAX_WORD_LENGTH];
     char next_state[MAX_STATE_LENGTH];
+    char second_word[MAX_WORD_LENGTH];
     short stateIndex, followerIndex;
     short wordCount      = 0;
     short sentenceCount  = 0;
     short sentenceTarget = (RandomGen() % 2) + 1; /* 1-2 sentences */
+    short cap;
+    short attempts;
+
+    /* Never write past the caller's buffer, whatever the requested length */
+    if (maxLength <= 0)
+        return;
+    cap = (maxLength > kMaxResponseLength) ? (short)kMaxResponseLength : maxLength;
 
     /* Start with a state related to the user query if possible */
     if (gMarkovNodeCount == 0) {
-        strcpy(response, "I don't have enough information yet.");
+        CopyBounded(response, cap, "I don't have enough information yet.");
         return;
     }
 
@@ -566,29 +642,30 @@ static void GenerateContextualMarkovText(char *response, short maxLength, const 
     stateIndex = FindRelevantStartingState(userMessage);
 
     /* Add the starting state to the response */
-    strcpy(current_state, gMarkovChain[stateIndex].state);
-    strcat(response, current_state);
+    CopyBounded(current_state, sizeof(current_state), gMarkovChain[stateIndex].state);
+    AppendBounded(response, cap, current_state);
     wordCount += 2; /* State has two words */
 
     /* Generate the response - same as before */
-    while (strlen(response) < maxLength - MAX_WORD_LENGTH && sentenceCount < sentenceTarget) {
+    while ((short)strlen(response) + MAX_STATE_LENGTH + 2 < cap &&
+           sentenceCount < sentenceTarget) {
         /* Try to find the current state in the chain */
         stateIndex = FindStateInChain(current_state);
 
         if (stateIndex < 0 || gMarkovChain[stateIndex].followerCount == 0) {
             /* State not found or has no followers */
-            strcat(response, ". "); /* End the sentence */
+            AppendBounded(response, cap, ". "); /* End the sentence */
             sentenceCount++;
 
             /* Pick a new sentence starter state */
-            short attempts = 0;
+            attempts = 0;
             do {
                 stateIndex = RandomGen() % gMarkovNodeCount;
                 attempts++;
             } while (!gMarkovChain[stateIndex].isStartOfSentence && attempts < 10);
 
-            strcpy(current_state, gMarkovChain[stateIndex].state);
-            strcat(response, current_state);
+            CopyBounded(current_state, sizeof(current_state), gMarkovChain[stateIndex].state);
+            AppendBounded(response, cap, current_state);
             wordCount += 2;
         }
         else {
@@ -597,48 +674,50 @@ static void GenerateContextualMarkovText(char *response, short maxLength, const 
             if (followerIndex < 0)
                 continue;
 
-            strcpy(next_word, gMarkovChain[stateIndex].followers[followerIndex].word);
+            CopyBounded(next_word, sizeof(next_word),
+                        gMarkovChain[stateIndex].followers[followerIndex].word);
 
             /* Add space and the next word */
-            strcat(response, " ");
-            strcat(response, next_word);
+            AppendBounded(response, cap, " ");
+            AppendBounded(response, cap, next_word);
             wordCount++;
 
             /* Create the next state */
-            char second_word[MAX_WORD_LENGTH];
-            GetSecondWord(current_state, second_word);
-            MakeState(second_word, next_word, next_state);
-            strcpy(current_state, next_state);
+            GetSecondWord(current_state, second_word, sizeof(second_word));
+            MakeState(second_word, next_word, next_state, sizeof(next_state));
+            CopyBounded(current_state, sizeof(current_state), next_state);
 
             /* Check for end of sentence */
             size_t len = strlen(next_word);
             if (len > 0 && IsSentenceEnder(next_word[len - 1])) {
                 sentenceCount++;
                 if (sentenceCount < sentenceTarget) {
-                    strcat(response, " ");
+                    AppendBounded(response, cap, " ");
                 }
             }
         }
 
         /* Avoid exceptionally long sentences */
         if (wordCount > 20 && sentenceCount < sentenceTarget) {
-            short i = strlen(response) - 1;
+            short i       = (short)strlen(response) - 1;
+            short respLen = (short)strlen(response);
+
             while (i > 0 && !strchr(".!?", response[i]))
                 i--;
 
-            if (i < strlen(response) - 15) { /* If no recent sentence ending */
-                strcat(response, ". ");
+            if (i < respLen - 15) { /* If no recent sentence ending */
+                AppendBounded(response, cap, ". ");
                 sentenceCount++;
 
                 /* Pick a new sentence starter state */
-                short attempts = 0;
+                attempts = 0;
                 do {
                     stateIndex = RandomGen() % gMarkovNodeCount;
                     attempts++;
                 } while (!gMarkovChain[stateIndex].isStartOfSentence && attempts < 10);
 
-                strcpy(current_state, gMarkovChain[stateIndex].state);
-                strcat(response, current_state);
+                CopyBounded(current_state, sizeof(current_state), gMarkovChain[stateIndex].state);
+                AppendBounded(response, cap, current_state);
                 wordCount += 2;
             }
         }
@@ -647,37 +726,40 @@ static void GenerateContextualMarkovText(char *response, short maxLength, const 
     /* Ensure the response ends with proper punctuation */
     size_t len = strlen(response);
     if (len > 0 && !strchr(".!?", response[len - 1])) {
-        strcat(response, ".");
+        AppendBounded(response, cap, ".");
     }
 }
 
 /* Function that returns an appropriate response based on user input using Markov model */
 char *GenerateMarkovResponse(const ConversationHistory *history)
 {
-    static char response[512];
+    static char response[kMaxResponseLength];
     const char *userMessage = NULL;
 
     /* Initialize with default response in case something goes wrong */
-    strcpy(response, "I'm thinking about how to respond...");
+    CopyBounded(response, (short)sizeof(response), "I'm thinking about how to respond...");
 
     if (history != NULL && history->count > 0) {
-        /* Find the last user message */
+        /* Find the last user message. head is the oldest entry, so index
+           (head + i) % kMaxConversationHistory walks newest to oldest even
+           after the circular buffer has wrapped. */
         short i;
         for (i = history->count - 1; i >= 0; i--) {
-            if (history->messages[i].type == kUserMessage) {
-                userMessage = history->messages[i].text;
+            short idx = (history->head + i) % kMaxConversationHistory;
+            if (history->messages[idx].type == kUserMessage) {
+                userMessage = history->messages[idx].text;
                 break;
             }
         }
 
         if (userMessage && *userMessage) {
             /* Generate contextual response based on markov chain */
-            GenerateContextualMarkovText(response, 500, userMessage);
+            GenerateContextualMarkovText(response, (short)sizeof(response), userMessage);
             return response;
         }
     }
 
     /* No history or no user message, generate generic response */
-    GenerateMarkovText(response, 500);
+    GenerateMarkovText(response, (short)sizeof(response));
     return response;
 }

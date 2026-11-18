@@ -1,4 +1,5 @@
 #include <Dialogs.h>
+#include <Events.h>
 #include <Fonts.h>
 #include <Memory.h>
 #include <Menus.h>
@@ -8,9 +9,12 @@
 #include <TextEdit.h>
 #include <Windows.h>
 
+#include "chatbot/api_client.h"
 #include "constants.h"
 #include "error.h"
+#include "prefs.h"
 #include "sound/beepbop.h"
+#include "ui/chat_window.h"
 #include "ui/event.h"
 #include "ui/menu.h"
 #include "ui/window_manager.h"
@@ -39,13 +43,6 @@ int main(void)
     MoreMasters(); /* Allocate additional master pointers for handles */
     MoreMasters(); /* Call twice to ensure plenty of master pointers */
 
-    /* Check available memory early */
-    err = CheckMemory();
-    if (err != noErr) {
-        HandleError(kErrMemoryFull, kCtxLaunchingApp, true); /* Fatal error */
-        return 1; /* Should never reach here due to fatal error */
-    }
-
     InitGraf(&qd.thePort); /* QuickDraw */
     InitFonts();           /* Font Manager */
     InitWindows();         /* Window Manager */
@@ -54,8 +51,15 @@ int main(void)
     InitDialogs(NULL);     /* Dialog Manager */
     InitCursor();          /* Set arrow cursor */
 
-    /* Clear any pending events */
-    FlushEvents(everyEvent, 0);
+    /* Memory checks need the Dialog Manager for their error alert */
+    err = CheckMemory();
+    if (err != noErr) {
+        HandleError(kErrMemoryFull, kCtxLaunchingApp, true); /* Fatal error */
+        return 1; /* Should never reach here due to fatal error */
+    }
+
+    /* Clear pending input events without discarding update or disk events */
+    FlushEvents(mDownMask | mUpMask | keyDownMask | keyUpMask | autoKeyMask, 0);
 
     /*----------------------------------------
      * Setup application UI
@@ -79,8 +83,16 @@ int main(void)
     AppendResMenu(appleMenu, 'DRVR');
     DrawMenuBar();
 
+    /* Load persisted settings, then bring up the network client. API_Init only
+       initializes the transport and TLS context; it does not connect. */
+    Prefs_Load();
+    API_Init();
+
     /* Initialize window manager and default windows */
-    WindowManager_Initialize();
+    if (!WindowManager_Initialize()) {
+        HandleError(kErrWindowCreation, kCtxCreatingMainWindow, true); /* Fatal */
+        return 1; /* Should never reach here due to fatal error */
+    }
 
     /*----------------------------------------
      * Main event loop
@@ -94,15 +106,29 @@ int main(void)
         /* Perform idle for any audio */
         BeepBopIdle();
 
-        /* Perform idle processing for active window */
-        WindowManager_Idle();
+        /* Drive the streaming API request and blink the insertion point */
+        ChatWindow_Idle();
 
-        /* Get and process the next event */
-        if (GetNextEvent(everyEvent, &event)) {
-            /* Delegate all event handling to the window manager */
+        /* WaitNextEvent yields time to other applications while waiting */
+        if (WaitNextEvent(everyEvent, &event, 1, NULL)) {
+            /* Dispatch command-key menu equivalents */
+            if (event.what == keyDown) {
+                long menuCommand = MenuKey(event.message & charCodeMask);
+
+                if (menuCommand != 0) {
+                    HiliteMenu(0);
+                    DoMenuCommand(menuCommand);
+                    continue;
+                }
+            }
+
+            /* Delegate all other events to the window manager */
             WindowManager_HandleEvent(&event);
         }
     }
+
+    /* Not reached: QuitApplication() ends the process */
+    API_Shutdown();
 
     return 0;
 }

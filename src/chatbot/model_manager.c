@@ -5,7 +5,6 @@
 #include "../constants.h"
 #include "markov.h"
 #include "model_manager.h"
-#include "openai.h"
 #include "template.h"
 
 /* Global conversation history */
@@ -20,7 +19,7 @@ Boolean gModelsInitialized = false;
 /* Initialize all AI models and conversation history */
 void InitModels(void)
 {
-    char welcomeMsg[200];
+    const char *welcomeMsg = "AI initialized! How can I help you today?";
 
     /* Clear the conversation history and initialize circular buffer */
     gConversationHistory.count  = 0;
@@ -33,9 +32,6 @@ void InitModels(void)
         if (gActiveAIModel == kMarkovModel) {
             InitMarkovModel();
         }
-        else if (gActiveAIModel == kOpenAIModel) {
-            InitOpenAI();
-        }
         else if (gActiveAIModel == kTemplateModel) {
             InitTemplateModel();
         }
@@ -45,13 +41,13 @@ void InitModels(void)
 
     /* Add welcome message to the conversation history */
     if (gActiveAIModel == kMarkovModel) {
-        strcpy(welcomeMsg, "AI initialized! Using Markov chain model. How can I help you today?");
+        welcomeMsg = "AI initialized! Using Markov chain model. How can I help you today?";
     }
-    else if (gActiveAIModel == kOpenAIModel) {
-        strcpy(welcomeMsg, "AI initialized! Using OpenAI model. How can I help you today?");
+    else if (gActiveAIModel == kRemoteModel) {
+        welcomeMsg = "AI initialized! Using remote AI. How can I help you today?";
     }
     else if (gActiveAIModel == kTemplateModel) {
-        strcpy(welcomeMsg, "AI initialized! Using Template-based model. How can I help you today?");
+        welcomeMsg = "AI initialized! Using Template-based model. How can I help you today?";
     }
 
     AddAIResponse(welcomeMsg);
@@ -68,9 +64,6 @@ void SetActiveAIModel(AIModelType modelType)
         if (modelType == kMarkovModel) {
             InitMarkovModel();
         }
-        else if (modelType == kOpenAIModel) {
-            InitOpenAI();
-        }
         else if (modelType == kTemplateModel) {
             InitTemplateModel();
         }
@@ -83,18 +76,19 @@ char *GenerateAIResponse(const ConversationHistory *history)
     if (gActiveAIModel == kMarkovModel) {
         return GenerateMarkovResponse(history);
     }
-    if (gActiveAIModel == kOpenAIModel) {
-        return GenerateOpenAIResponse(history);
-    }
     if (gActiveAIModel == kTemplateModel) {
         return GenerateTemplateResponse(history);
     }
 
-    /* Default case to avoid missing return */
+    /* The remote model is driven asynchronously by the API client in the
+       chat window, so there is no synchronous response to generate here. */
     return "Error: Unknown model type";
 }
 
-/* Calculate the tail index (position for the new item) in the circular buffer */
+/* Calculate the tail index (position for the new item) in the circular buffer.
+   Invariant: head is the oldest live entry; when count < kMaxConversationHistory
+   the newest entry is at head + count - 1, and when isFull is set count equals
+   kMaxConversationHistory and the next write replaces the entry at head. */
 static short CircularBufferTail(void)
 {
     if (gConversationHistory.isFull) {
@@ -116,10 +110,12 @@ static void AddToCircularBuffer(MessageType type, const char *text)
 {
     short tail = CircularBufferTail();
 
-    /* Add the new message at the tail position */
+    /* Add the new message at the tail position.
+       History keeps at most kMaxConversationText - 1 characters; the display
+       buffer still shows the full text. */
     gConversationHistory.messages[tail].type = type;
-    strncpy(gConversationHistory.messages[tail].text, text, kMaxPromptLength - 1);
-    gConversationHistory.messages[tail].text[kMaxPromptLength - 1] = '\0';
+    strncpy(gConversationHistory.messages[tail].text, text, kMaxConversationText - 1);
+    gConversationHistory.messages[tail].text[kMaxConversationText - 1] = '\0';
 
     /* Update buffer state */
     if (gConversationHistory.isFull) {

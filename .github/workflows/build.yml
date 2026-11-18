@@ -1,0 +1,97 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Host tests
+        run: bash tests/host/run.sh
+
+      # The 68k Open Transport transport needs Apple's Universal Interfaces
+      # headers and glue libraries, which cannot be committed here. The
+      # Retro68 community mirror of them lives in the Gateway repository's
+      # third_party tree; it is staged into the toolchain by `make universal`.
+      - name: Apple Universal Interfaces
+        run: |
+          set -euo pipefail
+          mkdir -p ial
+          curl -sSL -o /tmp/ial.tgz \
+            "https://codeload.github.com/brunocastello/Gateway/tar.gz/1a2dfe8bbd8251c52fad67de03bd3dc1d52f2688"
+          tar xzf /tmp/ial.tgz -C ial --strip-components=3 \
+            Gateway-1a2dfe8bbd8251c52fad67de03bd3dc1d52f2688/third_party/InterfacesAndLibraries
+          test -f ial/Interfaces/CIncludes/OpenTransport.h
+          test -f ial/Libraries/Libraries/OpenTransportApp.o
+
+      - name: Build in Retro68 image
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/root/work" -w /root/work \
+            -e APP_VERSION_STR="${{ github.ref_name }}" \
+            ghcr.io/autc04/retro68 bash -lc \
+            'make build APP_NAME=MacintoshAI IAL_DIR=/root/work/ial'
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq hfsutils
+          # The container builds as root; the image must be writable for hmount.
+          sudo chown -R "$(id -u):$(id -g)" dist
+
+          # The disk image must carry the application with a resource fork.
+          hmount dist/MacintoshAI.dsk
+          hdir -a | tee /tmp/hdir.txt
+          humount
+          if ! grep -qE '^ *f +APPL/McAI +[1-9][0-9]* +0 ' /tmp/hdir.txt; then
+            echo "::error::MacintoshAI.APPL on the disk image has no resource fork"
+            exit 1
+          fi
+
+          # StuffIt archive: a bare .dsk cannot be opened from a browser on a
+          # modern Mac. The application's data fork is empty; its resource fork
+          # lives in the AppleDouble file.
+          if git clone --depth 1 https://github.com/thecloudexpanse/sit /tmp/sit-src \
+             && make -C /tmp/sit-src; then
+            mkdir -p pack
+            : > pack/MacintoshAI
+            cp "dist/%MacintoshAI.ad" pack/._MacintoshAI
+            /tmp/sit-src/sit -T APPL -C McAI \
+              -o "dist/MacintoshAI-${{ github.ref_name }}-68k.sit" pack/MacintoshAI \
+              || rm -f dist/*.sit
+          fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macintosh-ai-68k
+          path: dist/*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ls dist/*.sit >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              dist/MacintoshAI.dsk dist/MacintoshAI.bin dist/*.sit \
+              --title "Macintosh AI $GITHUB_REF_NAME" --generate-notes
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              dist/MacintoshAI.dsk dist/MacintoshAI.bin \
+              --title "Macintosh AI $GITHUB_REF_NAME" \
+              --notes "Macintosh AI for 68k Macs. The StuffIt archive could not be produced in CI: download the .dsk and mount it, or use the .bin."
+          fi

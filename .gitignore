@@ -1,14 +1,17 @@
 # Build artifacts
 build/
+dist/
+compile_commands.json
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-*.cmake
 *.o
 *.a
 *.so
 *.dylib
-dist/
+*.dSYM/
+*.map
+.cache/
 
 # macOS specific
 .DS_Store
@@ -20,4 +23,10 @@ dist/
 *.swo
 
 CLAUDE.md
-libs/*/build/
+ial/
+
+# Emulator test harness: disposable VM clone, screenshots, logs, venv
+tests/emulator/.work/
+tests/emulator/.venv/
+__pycache__/
+*.pyc

@@ -1,111 +1,148 @@
-.PHONY: build clean run format lint debug debug-run
+# Macintosh AI - Classic Mac OS (68k) build.
+#
+# Everything builds inside the Retro68 image; see README.md. The one-liner
+# (Apple's Universal Interfaces are mounted read-only for the OT headers):
+#
+#   docker run --rm -v "$PWD:/root/work" \
+#     -v "$HOME/Documents/SendToMacOS9:/ial:ro" -w /root/work \
+#     -e APP_VERSION_STR="$(git describe --tags --always --dirty)" \
+#     ghcr.io/autc04/retro68 bash -lc \
+#     'make build IAL_DIR="/ial/MPW/MPW-GM+PR+Final Updates/Interfaces&Libraries"'
 
-# Default values
-RETRO68_PATH ?= ~/Projects/macintosh/Retro68-build
-USE_BASILISK ?= OFF
-APP_NAME ?= App
+.DEFAULT_GOAL := build
 
-# Get absolute path by expanding tilde
-ABSOLUTE_PATH := $(shell echo $(RETRO68_PATH) | sed 's:^~:$(HOME):')
+.PHONY: build deps universal universal-force check-toolchain \
+        debug-build run debug-run clean format lint
 
-# Automatically construct paths
-TOOLCHAIN_PATH = $(ABSOLUTE_PATH)/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
-LAUNCH_APPL = $(ABSOLUTE_PATH)/toolchain/bin/LaunchAPPL
+APP_NAME ?= MacintoshAI
+RETRO68_PATH ?= /Retro68-build
+NET68K_TRANSPORT ?= ot
 
-# Source files
-SOURCES := $(shell find src -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp")
+# Apple's Universal Interfaces & Libraries (MPW GM): the only source of the
+# 68k Open Transport headers and libraries. Override with IAL_DIR=...
+IAL_DIR ?= $(HOME)/Documents/SendToMacOS9/MPW/MPW-GM+PR+Final Updates/Interfaces&Libraries
 
-# Configure CMake options
-CMAKE_OPTS = -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) \
-             -DUSE_MINIVMAC=$(shell if [ "$(USE_BASILISK)" = "ON" ]; then echo OFF; else echo ON; fi) \
-             -DAPP_NAME=$(APP_NAME) \
-             -DLAUNCH_APPL=$(LAUNCH_APPL)
+TOOLCHAIN := $(RETRO68_PATH)/toolchain
+TOOLCHAIN_PREFIX := $(TOOLCHAIN)/m68k-apple-macos
+TOOLCHAIN_FILE := $(TOOLCHAIN_PREFIX)/cmake/retro68.toolchain.cmake
+UNIVERSAL_DIR := $(TOOLCHAIN)/universal
+LAUNCH_APPL := $(RETRO68_PATH)/toolchain/bin/LaunchAPPL
+STAGE_SCRIPT := $(RETRO68_PATH)/bin/interfaces-and-libraries.sh
 
-# Build dependencies in the correct order
-build-deps: build-cjson build-mactcphelper build-mbedtls build-machttp
+APP_VERSION_STR ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-# Build cJSON library
-build-cjson:
-	@echo "Building cJSON library..."
-	mkdir -p libs/cjson/build
-	cd libs/cjson/build && cmake .. -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DENABLE_CJSON_UTILS=On -DENABLE_CJSON_TEST=Off -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=$(ABSOLUTE_PATH)/toolchain/m68k-apple-macos && cmake --build . && cmake --install .
-	@echo "cJSON build complete"
+CMAKE_OPTS = -DCMAKE_TOOLCHAIN_FILE="$(TOOLCHAIN_FILE)" \
+             -DAPP_NAME="$(APP_NAME)" \
+             -DAPP_VERSION_STR="$(APP_VERSION_STR)" \
+             -DNET68K_TRANSPORT="$(NET68K_TRANSPORT)" \
+             -DNET68K_UNIVERSAL_DIR="$(UNIVERSAL_DIR)" \
+             -DLAUNCH_APPL="$(LAUNCH_APPL)"
 
-# Build mbedtls library
-build-mbedtls:
-	@echo "Building mbedtls library..."
-	mkdir -p libs/mbedtls-mac-68k/build
-	cd libs/mbedtls-mac-68k/build && cmake .. -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF -DUNSAFE_BUILD=ON -DCMAKE_INSTALL_PREFIX=$(ABSOLUTE_PATH)/toolchain/m68k-apple-macos && cmake --build . && cmake --install .
-	@echo "mbedtls build complete"
+check-toolchain:
+	@test -f "$(TOOLCHAIN_FILE)" || { \
+		echo "error: Retro68 toolchain not found at $(TOOLCHAIN_FILE)"; \
+		echo "       set RETRO68_PATH to your Retro68-build directory (default /Retro68-build)."; \
+		exit 1; \
+	}
 
-# Build mactcphelper library
-build-mactcphelper:
-	@echo "Building MacTCPHelper library..."
-	mkdir -p libs/mactcphelper/build
-	cd libs/mactcphelper/build && cmake .. -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=$(ABSOLUTE_PATH)/toolchain/m68k-apple-macos && cmake --build . && cmake --install .
-	@echo "MacTCPHelper build complete"
+# Stage Apple's Universal Interfaces into $(TOOLCHAIN)/universal, then put the
+# toolchain's global include path back on the open-source Multiversal headers
+# so only libs/net68k's Open Transport translation unit sees Apple's headers.
+#
+# The second invocation is essential: the first one leaves Apple's headers
+# linked into $(TOOLCHAIN_PREFIX)/include, which would shadow Multiversal for
+# every source file in src/.
+# Stage Apple's Universal Interfaces & Libraries into the toolchain and link
+# them in globally, which is what the whole application builds against.
+#
+# Not `--multiversal` afterwards: Retro68's bundled Multiversal set has only 44
+# headers and is missing Controls.h, Lists.h, Scrap.h, Script.h and Threads.h,
+# all of which this application and the engine's HttpClient.cpp include. The
+# staging script links Universal into $(TOOLCHAIN_PREFIX)/include and
+# .../lib, replacing the Multiversal symlinks; setting up the toolchain that
+# way is what Retro68's own build-toolchain.sh does when Apple's interfaces are
+# supplied.
+universal: check-toolchain
+	@if [ -f "$(UNIVERSAL_DIR)/CIncludes/OpenTransport.h" ] && \
+	    [ -f "$(UNIVERSAL_DIR)/lib68k/libOpenTptInet.a" ] && \
+	    [ -f "$(TOOLCHAIN_PREFIX)/include/Controls.h" ]; then \
+		echo "Universal Interfaces already staged in $(UNIVERSAL_DIR)"; \
+	else \
+		test -d "$(IAL_DIR)" || { \
+			echo "error: Apple's Universal Interfaces not found at:"; \
+			echo "       $(IAL_DIR)"; \
+			echo "       set IAL_DIR to the Interfaces&Libraries directory"; \
+			exit 1; \
+		}; \
+		"$(STAGE_SCRIPT)" "$(TOOLCHAIN)" "$(IAL_DIR)" true false false; \
+	fi
+	@test -f "$(UNIVERSAL_DIR)/CIncludes/OpenTransport.h" || { \
+		echo "error: $(UNIVERSAL_DIR)/CIncludes/OpenTransport.h is missing"; \
+		exit 1; \
+	}
+	@test -f "$(UNIVERSAL_DIR)/lib68k/libOpenTptInet.a" || { \
+		echo "error: $(UNIVERSAL_DIR)/lib68k/libOpenTptInet.a is missing"; \
+		exit 1; \
+	}
+	@test -f "$(TOOLCHAIN_PREFIX)/include/Controls.h" || { \
+		echo "error: staging left the toolchain on Multiversal headers (no Controls.h)"; \
+		exit 1; \
+	}
 
-# Build machttp library (depends on mbedtls and mactcphelper)
-build-machttp: build-mbedtls build-mactcphelper
-	@echo "Building MacHTTP library..."
-	mkdir -p libs/machttp/build
-	cd libs/machttp/build && cmake .. -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSSL_ENABLED=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=$(ABSOLUTE_PATH)/toolchain/m68k-apple-macos && cmake --build . && cmake --install .
-	@echo "MacHTTP build complete"
+# Re-stage even when a previous staging is present.
+universal-force: check-toolchain
+	@test -d "$(IAL_DIR)" || { \
+		echo "error: Apple's Universal Interfaces not found at:"; \
+		echo "       $(IAL_DIR)"; \
+		exit 1; \
+	}
+	"$(STAGE_SCRIPT)" "$(TOOLCHAIN)" "$(IAL_DIR)" true false false
 
-build: build-deps
-	mkdir -p build
-	cd build && cmake .. $(CMAKE_OPTS) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build .
+deps: universal
+
+build: check-toolchain deps
+	cmake -S . -B build $(CMAKE_OPTS)
+	cmake --build build
 	mkdir -p dist
-	cp build/$(APP_NAME).{dsk,bin} dist
+	# The .APPL is an empty placeholder: the application is the .bin (MacBinary)
+	# and the .dsk; the resource fork travels in the AppleDouble %$(APP_NAME).ad.
+	cp build/$(APP_NAME).dsk dist/
+	cp build/$(APP_NAME).bin dist/
+	cp build/$(APP_NAME).APPL dist/
+	cp build/$(APP_NAME).ad dist/
+	cp "build/%$(APP_NAME).ad" dist/
 
-debug-build:
-	mkdir -p build
-	cd build && cmake .. $(CMAKE_OPTS) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEBUG=ON && cmake --build .
-	cp build/$(APP_NAME).{dsk,bin} dist
+debug-build: check-toolchain deps
+	cmake -S . -B build $(CMAKE_OPTS) -DCMAKE_BUILD_TYPE=Debug
+	cmake --build build
+	mkdir -p dist
+	cp build/$(APP_NAME).dsk dist/
+	cp build/$(APP_NAME).bin dist/
+	cp build/$(APP_NAME).APPL dist/
+	cp build/$(APP_NAME).ad dist/
+	cp "build/%$(APP_NAME).ad" dist/
 
 run: build
-	cd build && cmake --build . --target run
-	
-debug-run: debug
-	cd build && cmake --build . --target run
+	cmake --build build --target run
 
-clean: clean-deps
-	cd build && cmake --build . --target clean || true
-	rm -rf build/* dist/*
+debug-run: debug-build
+	cmake --build build --target run
 
-clean-deps:
-	@echo "Cleaning dependency builds..."
-	rm -rf libs/*/build
-	@echo "Dependencies cleaned."
+clean:
+	rm -rf build dist
 
-# Format the code with clang-format
+# Format the code with clang-format.
 format:
-	@echo "Formatting code using clang-format..."
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found, please install it."; exit 1; }
-	@find src -path libs -prune -o \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" \) -print | xargs clang-format -i -style=file
-	@echo "Formatting complete."
+	find src -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" | \
+		xargs clang-format -i -style=file
 
-# Run static analysis
-lint:
-	@echo "Running static analysis..."
-	
-	@# Make sure we have a compilation database for clang-tidy
-	@cd build && cmake .. $(CMAKE_OPTS) -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-	
-	if command -v clang-tidy >/dev/null 2>&1; then \
-		echo "Found clang-tidy, performing deep analysis..."; \
-		for file in $$(find src -path libs -prune -o \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" \) -print); do \
-			echo "Analyzing $$file"; \
-			clang-tidy "$$file" -p build; \
-		done; \
-		echo ""; \
-	fi
-	
-	@echo "Static analysis complete."
-
-# Usage examples:
-# make build RETRO68_PATH=/path/to/Retro68-build
-# make run USE_BASILISK=ON
-# make build APP_NAME=MyApp
-# make format
-# make lint
+# Run static analysis over the compilation database written by the configure
+# step (no `cd build`, so a clean tree works).
+lint: check-toolchain
+	cmake -S . -B build $(CMAKE_OPTS) -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+	@command -v clang-tidy >/dev/null 2>&1 || { echo "clang-tidy not found, nothing to do."; exit 0; }
+	find src -name "*.c" -o -name "*.cpp" | while read file; do \
+		echo "Analyzing $$file"; \
+		clang-tidy "$$file" -p build || true; \
+	done

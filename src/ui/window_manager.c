@@ -3,9 +3,9 @@
 #include <Menus.h>
 #include <Windows.h>
 
+#include "../chatbot/api_client.h"
 #include "../constants.h"
 #include "../error.h"
-#include "about_window.h"
 #include "chat_window.h"
 #include "event.h"
 #include "menu.h"
@@ -14,14 +14,37 @@
 
 /*
  * Window Manager module that coordinates operations between
- * individual window modules using a standardized interface
+ * individual window modules using a standardized interface.
+ *
+ * The About box is not a window module: it is a modal dialog shown and
+ * disposed entirely inside AboutWindow_Show().
  */
 
+#define kWindowModuleCount 2
+
 /* Window modules registration */
-static WindowModule gWindowModules[3];
+static WindowModule gWindowModules[kWindowModuleCount];
 
 /* Current active window tracking */
 static WindowType gForegroundWindowType = kWindowTypeSplash;
+
+/* Find the module that owns a window, if any */
+static short FindModuleForWindow(WindowRef window)
+{
+    short i;
+
+    if (window == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < kWindowModuleCount; i++) {
+        if (gWindowModules[i].initialized && gWindowModules[i].getWindowRef() == window) {
+            return i;
+        }
+    }
+
+    return -1;
+}
 
 /* Register window module functions */
 static void RegisterWindowModules(void)
@@ -45,41 +68,37 @@ static void RegisterWindowModules(void)
     gWindowModules[kWindowTypeChat].isVisible    = ChatWindow_IsVisible;
     gWindowModules[kWindowTypeChat].initialized  = false;
     gWindowModules[kWindowTypeChat].visible      = false;
-
-    /* About window */
-    gWindowModules[kWindowTypeAbout].initialize   = AboutWindow_Initialize;
-    gWindowModules[kWindowTypeAbout].dispose      = AboutWindow_Dispose;
-    gWindowModules[kWindowTypeAbout].show         = AboutWindow_Show;
-    gWindowModules[kWindowTypeAbout].handleEvent  = AboutWindow_HandleEvent;
-    gWindowModules[kWindowTypeAbout].getWindowRef = AboutWindow_GetWindowRef;
-    gWindowModules[kWindowTypeAbout].isVisible    = AboutWindow_IsVisible;
-    gWindowModules[kWindowTypeAbout].initialized  = false;
-    gWindowModules[kWindowTypeAbout].visible      = false;
 }
 
 /* Initialize the window manager and the initial window */
-void WindowManager_Initialize(void)
+Boolean WindowManager_Initialize(void)
 {
-    /* Register all window modules first */
     RegisterWindowModules();
 
     /* Initialize splash window as the default view */
-    gWindowModules[kWindowTypeSplash].initialize();
+    if (!gWindowModules[kWindowTypeSplash].initialize()) {
+        return false;
+    }
     gWindowModules[kWindowTypeSplash].initialized = true;
-    gWindowModules[kWindowTypeSplash].show(true);
+
+    if (!gWindowModules[kWindowTypeSplash].show(true)) {
+        return false;
+    }
     gWindowModules[kWindowTypeSplash].visible = true;
 
-    /* Set the splash window as foreground */
-    gForegroundWindowType = kWindowTypeSplash;
+    /* Set the splash window as foreground so menus start in the right state */
+    WindowManager_SetForegroundWindow(kWindowTypeSplash);
+
+    return true;
 }
 
 /* Dispose all windows and clean up resources */
 void WindowManager_Dispose(void)
 {
-    int i;
+    short i;
 
     /* Dispose windows that were initialized */
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < kWindowModuleCount; i++) {
         if (gWindowModules[i].initialized) {
             gWindowModules[i].dispose();
             gWindowModules[i].initialized = false;
@@ -89,29 +108,36 @@ void WindowManager_Dispose(void)
 }
 
 /* Open a specific type of window */
-void WindowManager_OpenWindow(WindowType windowType)
+Boolean WindowManager_OpenWindow(WindowType windowType)
 {
+    if (windowType >= kWindowModuleCount) {
+        return false;
+    }
+
     /* Initialize the window if it hasn't been initialized yet */
     if (!gWindowModules[windowType].initialized) {
-        gWindowModules[windowType].initialize();
+        if (!gWindowModules[windowType].initialize()) {
+            return false;
+        }
         gWindowModules[windowType].initialized = true;
     }
 
     /* Show the window */
-    gWindowModules[windowType].show(true);
+    if (!gWindowModules[windowType].show(true)) {
+        return false;
+    }
     gWindowModules[windowType].visible = true;
 
-    /* Handle special case for About window (doesn't change foreground) */
-    if (windowType != kWindowTypeAbout) {
-        WindowManager_SetForegroundWindow(windowType);
-    }
+    WindowManager_SetForegroundWindow(windowType);
+
+    return true;
 }
 
 /* Close a specific type of window */
 void WindowManager_CloseWindow(WindowType windowType)
 {
     /* Only hide the window if it was initialized */
-    if (gWindowModules[windowType].initialized) {
+    if (windowType < kWindowModuleCount && gWindowModules[windowType].initialized) {
         gWindowModules[windowType].show(false);
         gWindowModules[windowType].visible = false;
     }
@@ -123,7 +149,7 @@ void WindowManager_SetForegroundWindow(WindowType windowType)
     WindowRef windowRef;
 
     /* Ignore if the window hasn't been initialized */
-    if (!gWindowModules[windowType].initialized) {
+    if (windowType >= kWindowModuleCount || !gWindowModules[windowType].initialized) {
         return;
     }
 
@@ -149,10 +175,6 @@ void WindowManager_SetForegroundWindow(WindowType windowType)
     case kWindowTypeChat:
         gAppMode = kModeChatWindow;
         break;
-
-    default:
-        /* No change to app mode for other window types */
-        break;
     }
 
     /* Update menus based on active window */
@@ -168,7 +190,7 @@ WindowType WindowManager_GetForegroundWindowType(void)
 /* Get window reference for a specific window type */
 WindowRef WindowManager_GetWindowRef(WindowType windowType)
 {
-    if (windowType >= 0 && windowType < 3 && gWindowModules[windowType].initialized) {
+    if (windowType < kWindowModuleCount && gWindowModules[windowType].initialized) {
         return gWindowModules[windowType].getWindowRef();
     }
     return NULL;
@@ -177,10 +199,20 @@ WindowRef WindowManager_GetWindowRef(WindowType windowType)
 /* Check if a window is visible */
 Boolean WindowManager_IsWindowVisible(WindowType windowType)
 {
-    if (windowType >= 0 && windowType < 3 && gWindowModules[windowType].initialized) {
+    if (windowType < kWindowModuleCount && gWindowModules[windowType].initialized) {
         return gWindowModules[windowType].isVisible();
     }
     return false;
+}
+
+/* Close the chat window and go back to the splash screen */
+static void ReturnToSplash(void)
+{
+    WindowManager_CloseWindow(kWindowTypeChat);
+
+    if (!WindowManager_OpenWindow(kWindowTypeSplash)) {
+        HandleError(kErrWindowCreation, kCtxCreatingMainWindow, true);
+    }
 }
 
 /* Handle standard window operations like dragging, closing, etc. */
@@ -189,110 +221,55 @@ static Boolean HandleStandardWindowOps(EventRecord *event)
     WindowRef window;
     short part;
 
-    if (event->what == mouseDown) {
-        part = FindWindow(event->where, &window);
-
-        if (part == inMenuBar) {
-            /* Handle menu clicks */
-            UpdateMenus();
-            DoMenuCommand(MenuSelect(event->where));
-            return true;
-        }
-        else if (part == inSysWindow) {
-            /* Handle clicks in system windows (desk accessories) */
-            SystemClick(event, window);
-            return true;
-        }
-        else if (part == inDrag) {
-            /* User is dragging a window */
-            DragWindow(window, event->where, &qd.screenBits.bounds);
-            return true;
-        }
-        else if (part == inGoAway) {
-            /* User clicked window close box */
-            if (TrackGoAway(window, event->where)) {
-                if (window == gWindowModules[kWindowTypeSplash].getWindowRef()) {
-                    /* Closing main window quits app */
-                    QuitApplication(false);
-                }
-                else if (window == gWindowModules[kWindowTypeChat].getWindowRef()) {
-                    /* Closing chat window returns to splash screen */
-                    WindowManager_CloseWindow(kWindowTypeChat);
-                    WindowManager_OpenWindow(kWindowTypeSplash);
-                }
-                else if (window == gWindowModules[kWindowTypeAbout].getWindowRef()) {
-                    /* Just close the about window */
-                    WindowManager_CloseWindow(kWindowTypeAbout);
-                }
-                else {
-                    DisposeWindow(window);
-                }
-            }
-            return true;
-        }
-        else if (part == inContent && window != FrontWindow()) {
-            /* Activate clicked window */
-            SelectWindow(window);
-
-            /* Update foreground window type */
-            if (window == gWindowModules[kWindowTypeSplash].getWindowRef()) {
-                WindowManager_SetForegroundWindow(kWindowTypeSplash);
-            }
-            else if (window == gWindowModules[kWindowTypeChat].getWindowRef()) {
-                WindowManager_SetForegroundWindow(kWindowTypeChat);
-            }
-            return true;
-        }
+    if (event->what != mouseDown) {
+        return false;
     }
 
-    return false;
-}
+    part = FindWindow(event->where, &window);
 
-/* Handle global key commands */
-static Boolean HandleGlobalKeys(EventRecord *event)
-{
-    char key;
-
-    if (event->what == keyDown && (event->modifiers & cmdKey)) {
-        key = event->message & charCodeMask;
-
-        /* Cmd-L to open chat window */
-        if (key == 'l' || key == 'L') {
-            WindowManager_OpenWindow(kWindowTypeChat);
-            WindowManager_CloseWindow(kWindowTypeSplash);
-            return true;
-        }
-
-        /* Cmd-W to close window */
-        else if (key == 'w' || key == 'W') {
-            WindowRef window = FrontWindow();
-            if (window) {
-                if (GetWindowKind(window) < 0) {
-                    /* Close desk accessory */
-                    CloseDeskAcc(GetWindowKind(window));
-                }
-                else if (window == gWindowModules[kWindowTypeChat].getWindowRef()) {
-                    /* Close chat window and switch back to splash mode */
-                    WindowManager_CloseWindow(kWindowTypeChat);
-                    WindowManager_OpenWindow(kWindowTypeSplash);
-                }
-                else if (window == gWindowModules[kWindowTypeSplash].getWindowRef()) {
-                    /* Closing main window quits app */
-                    QuitApplication(false);
-                }
-                else {
-                    /* Other window */
-                    DisposeWindow(window);
-                }
+    if (part == inMenuBar) {
+        /* Handle menu clicks */
+        UpdateMenus();
+        DoMenuCommand(MenuSelect(event->where));
+        return true;
+    }
+    else if (part == inSysWindow) {
+        /* Handle clicks in system windows (desk accessories) */
+        SystemClick(event, window);
+        return true;
+    }
+    else if (part == inDrag) {
+        /* User is dragging a window */
+        DragWindow(window, event->where, &qd.screenBits.bounds);
+        return true;
+    }
+    else if (part == inGoAway) {
+        /* User clicked window close box */
+        if (TrackGoAway(window, event->where)) {
+            if (window == gWindowModules[kWindowTypeSplash].getWindowRef()) {
+                /* Closing main window quits app */
+                API_Shutdown();
+                QuitApplication(false);
             }
-            return true;
+            else if (window == gWindowModules[kWindowTypeChat].getWindowRef()) {
+                /* Closing chat window returns to splash screen */
+                ReturnToSplash();
+            }
+            else {
+                DisposeWindow(window);
+            }
         }
+        return true;
+    }
+    else if (part == inContent && window != FrontWindow()) {
+        /* Activate clicked window */
+        short module = FindModuleForWindow(window);
 
-        /* Cmd-Q to quit application */
-        else if (key == 'q' || key == 'Q') {
-            QuitApplication(false);
-            return true;
+        SelectWindow(window);
+        if (module >= 0) {
+            WindowManager_SetForegroundWindow((WindowType)module);
         }
+        return true;
     }
 
     return false;
@@ -304,20 +281,22 @@ static void HandleWindowActivation(EventRecord *event)
     WindowRef window;
     Boolean becomingActive;
 
-    if (event->what == activateEvt) {
-        window         = (WindowRef)event->message;
-        becomingActive = (event->modifiers & activeFlag) != 0;
+    if (event->what != activateEvt) {
+        return;
+    }
 
-        /* Update the foreground window type if a window is being activated */
-        if (becomingActive) {
-            if (window == gWindowModules[kWindowTypeSplash].getWindowRef()) {
-                gForegroundWindowType = kWindowTypeSplash;
-                gAppMode              = kModeMainSplash;
-            }
-            else if (window == gWindowModules[kWindowTypeChat].getWindowRef()) {
-                gForegroundWindowType = kWindowTypeChat;
-                gAppMode              = kModeChatWindow;
-            }
+    window         = (WindowRef)event->message;
+    becomingActive = (event->modifiers & activeFlag) != 0;
+
+    /* Update the foreground window type if a window is being activated */
+    if (becomingActive) {
+        if (window == gWindowModules[kWindowTypeSplash].getWindowRef()) {
+            gForegroundWindowType = kWindowTypeSplash;
+            gAppMode              = kModeMainSplash;
+        }
+        else if (window == gWindowModules[kWindowTypeChat].getWindowRef()) {
+            gForegroundWindowType = kWindowTypeChat;
+            gAppMode              = kModeChatWindow;
         }
     }
 }
@@ -326,21 +305,34 @@ static void HandleWindowActivation(EventRecord *event)
 static Boolean RouteUpdateEvent(EventRecord *event)
 {
     WindowRef window;
-    int i;
+    short module;
 
-    if (event->what == updateEvt) {
-        window = (WindowRef)event->message;
-
-        /* Find which window needs updating */
-        for (i = 0; i < 3; i++) {
-            if (window == gWindowModules[i].getWindowRef() && gWindowModules[i].isVisible()) {
-                gWindowModules[i].handleEvent(event);
-                return true;
-            }
-        }
+    if (event->what != updateEvt) {
+        return false;
     }
 
-    return false;
+    window = (WindowRef)event->message;
+    module = FindModuleForWindow(window);
+
+    if (module < 0) {
+        return false;
+    }
+
+    if (gWindowModules[module].isVisible()) {
+        gWindowModules[module].handleEvent(event);
+    }
+    else {
+        /* Balance BeginUpdate/EndUpdate even for a hidden window */
+        GrafPtr savePort;
+
+        GetPort(&savePort);
+        SetPort(window);
+        BeginUpdate(window);
+        EndUpdate(window);
+        SetPort(savePort);
+    }
+
+    return true;
 }
 
 /* Handle all event types and route to appropriate handler */
@@ -348,11 +340,6 @@ void WindowManager_HandleEvent(EventRecord *event)
 {
     /* Handle standard window operations first */
     if (HandleStandardWindowOps(event)) {
-        return;
-    }
-
-    /* Handle global key commands */
-    if (HandleGlobalKeys(event)) {
         return;
     }
 
@@ -365,19 +352,9 @@ void WindowManager_HandleEvent(EventRecord *event)
     }
 
     /* Route other events to the foreground window */
-    if (gForegroundWindowType >= 0 && gForegroundWindowType < 3 &&
+    if (gForegroundWindowType < kWindowModuleCount &&
         gWindowModules[gForegroundWindowType].initialized &&
         gWindowModules[gForegroundWindowType].visible) {
         gWindowModules[gForegroundWindowType].handleEvent(event);
-    }
-}
-
-/* Perform idle-time processing */
-void WindowManager_Idle(void)
-{
-    /* Only need idle processing for chat window */
-    if (gForegroundWindowType == kWindowTypeChat && gWindowModules[kWindowTypeChat].initialized &&
-        gWindowModules[kWindowTypeChat].visible) {
-        ChatWindow_Idle(); /* Direct call since not part of standard interface */
     }
 }

@@ -8,7 +8,7 @@
 #define MAX_KEYWORDS 40
 
 /* Maximum number of patterns per template */
-#define MAX_PATTERNS 5
+#define MAX_PATTERNS 6
 
 /* Maximum length of a pattern or template text */
 #define MAX_PATTERN_LENGTH 64

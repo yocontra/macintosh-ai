@@ -22,7 +22,7 @@ resource 'MENU' (129) {
     {
         "Chat", noIcon, "L", noMark, plain;
         "Close", noIcon, "W", noMark, plain;
-        "-", noIcon, noKey, noMark, plain;
+        "Settings...", noIcon, ",", noMark, plain;
         "Quit", noIcon, "Q", noMark, plain;
     }
 };
@@ -34,7 +34,7 @@ resource 'MENU' (130) {
     "Models";
     {
         "Markov Chain", noIcon, noKey, noMark, plain;
-        "OpenAI", noIcon, noKey, noMark, plain;
+        "Remote AI", noIcon, noKey, noMark, plain;
         "Template", noIcon, noKey, noMark, plain;
     }
 };
@@ -61,21 +61,41 @@ resource 'STR#' (128) {
     }
 };
 
-/* About box text */
-data 'TEXT' (128) {
-    "AI Assistant\r\r"
-    "AI for Macintosh\r\r"
-    "This application provides AI capabilities for your Macintosh.\r\r"
-    "Press Cmd-L to open the chat window."
+/* About box (modal) */
+resource 'DLOG' (128) {
+    {60, 60, 250, 470},
+    dBoxProc,
+    invisible,
+    noGoAway,
+    0,
+    128,
+    "About Macintosh AI",
+    centerMainScreen
 };
 
-/* About box window */
-resource 'WIND' (128) {
-    {40, 40, 260, 360}, altDBoxProc;
-    invisible;
-    noGoAway;
-    0, "";
-    noAutoCenter;
+resource 'DITL' (128) {
+    {
+        {150, 155, 170, 225},
+        Button { enabled, "OK" };
+
+        {14, 16, 32, 394},
+        StaticText { enabled, "Macintosh AI" };
+
+        {36, 16, 52, 394},
+        StaticText { enabled, "Version ^0" };
+
+        {64, 16, 80, 394},
+        StaticText { enabled, "AI chat for the Macintosh." };
+
+        {84, 16, 100, 394},
+        StaticText { enabled, "Requires a 68020 or later, 8 MB of memory," };
+
+        {104, 16, 120, 394},
+        StaticText { enabled, "System 7.5.3 or later, and Open Transport 1.3." };
+
+        {128, 16, 144, 394},
+        StaticText { enabled, "Set your provider, model and API key in File > Settings." };
+    }
 };
 
 /* Main application window */
@@ -96,9 +116,55 @@ resource 'WIND' (130) {
     centerMainScreen;
 };
 
-/* Error alert */
+/* Settings dialog (modal) */
+resource 'DLOG' (140) {
+    {80, 60, 260, 460},
+    dBoxProc,
+    invisible,
+    noGoAway,
+    0,
+    140,
+    "AI Settings",
+    centerMainScreen
+};
+
+resource 'DITL' (140) {
+    {
+        {10, 12, 24, 180},
+        StaticText { enabled, "^0" };
+
+        {8, 190, 26, 388},
+        EditText { enabled, "anthropic" };
+
+        {34, 12, 48, 180},
+        StaticText { enabled, "^1" };
+
+        {32, 190, 50, 388},
+        EditText { enabled, "claude-sonnet-4-5" };
+
+        {58, 12, 72, 180},
+        StaticText { enabled, "^2" };
+
+        {56, 190, 74, 388},
+        EditText { enabled, "" };
+
+        {82, 12, 96, 180},
+        StaticText { enabled, "^3" };
+
+        {80, 190, 98, 388},
+        EditText { enabled, "" };
+
+        {128, 250, 148, 310},
+        Button { enabled, "OK" };
+
+        {128, 320, 148, 380},
+        Button { enabled, "Cancel" };
+    }
+};
+
+/* Error alert (the ALRT stage list is always four entries) */
 resource 'ALRT' (200) {
-    {50, 50, 150, 350},
+    {40, 40, 150, 500},
     200,
     {
         OK, visible, sound1,
@@ -111,10 +177,13 @@ resource 'ALRT' (200) {
 
 resource 'DITL' (200) {
     {
-        {70, 250, 90, 310},
+        {70, 350, 90, 410},
         Button { enabled, "OK" };
-        
-        {10, 10, 60, 310},
+
+        {10, 10, 42, 470},
+        StaticText { enabled, "^1" };
+
+        {46, 10, 66, 470},
         StaticText { enabled, "^0" };
     }
 };
@@ -229,7 +298,13 @@ resource 'ICN#' (128) {
     }
 };
 
-/* Memory allocation */
+/* Memory allocation.
+ *
+ * A SIZE resource needs all sixteen flag bits plus the two sizes: the flags
+ * are mutually exclusive pairs, so dropping one (we remove
+ * dontUseTextEditServices because the app allocates TextEdit records) means
+ * supplying its partner, not deleting the slot.
+ */
 resource 'SIZE' (-1) {
     reserved,
     acceptSuspendResumeEvents,
@@ -238,15 +313,15 @@ resource 'SIZE' (-1) {
     doesActivateOnFGSwitch,
     backgroundAndForeground,
     dontGetFrontClicks,
-    ignoreChildDiedEvents,
+    ignoreAppDiedEvents,
     is32BitCompatible,
     isHighLevelEventAware,
     onlyLocalHLEvents,
     notStationeryAware,
-    dontUseTextEditServices,
+    useTextEditServices,
+    notDisplayManagerAware,
     reserved,
     reserved,
-    reserved,
-    512 * 1024,   /* Minimal memory size for Markov chain and conversation history */
-    768 * 1024    /* Preferred memory size with buffer for generation and UI */
+    3072 * 1024,  /* Suggested: ~938 KB of statics, ~600 KB of code, 128 KB stack */
+    3072 * 1024   /* Minimum: below this the 68k loader cannot map code plus heap */
 };

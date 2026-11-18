@@ -1,7 +1,9 @@
+#include <ControlDefinitions.h>
 #include <Controls.h>
 #include <Fonts.h>
 #include <Memory.h>
 #include <Quickdraw.h>
+#include <Sound.h>
 #include <TextEdit.h>
 #include <TextUtils.h>
 #include <Windows.h>
@@ -9,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../chatbot/api_client.h"
 #include "../chatbot/model_manager.h"
 #include "../constants.h"
 #include "../error.h"
@@ -19,16 +22,22 @@
 static WindowRef sWindow    = NULL;
 static Boolean sInitialized = false;
 static Boolean sIsVisible   = false;
-static Rect sContentRect;                    /* Main content area */
-static Rect sInputRect;                      /* Input field at bottom */
-static Rect sDisplayRect;                    /* Display area for conversation */
-static TEHandle sInputTE        = NULL;      /* Text edit handle for input */
-static TEHandle sDisplayTE      = NULL;      /* Text edit handle for chat display */
-static ControlHandle sScrollBar = NULL;      /* Scrollbar for chat display */
-static char sPromptBuffer[kMaxPromptLength]; /* Buffer for user prompt */
+static Rect sContentRect;               /* Main content area */
+static Rect sInputRect;                 /* Input field at bottom */
+static Rect sDisplayRect;               /* Display area for conversation */
+static TEHandle sInputTE        = NULL; /* Text edit handle for input */
+static TEHandle sDisplayTE      = NULL; /* Text edit handle for chat display */
+static ControlHandle sScrollBar = NULL; /* Scrollbar for chat display */
+static TEHandle sFocusTE        = NULL; /* Field that owns the insertion point */
 
-/* AI model type */
-static AIModelType sActiveModel = kTemplateModel; /* Default to Template-based model */
+/* Asynchronous request state */
+static Boolean sAwaiting     = false; /* An API request is in flight */
+static short sResponseStart  = 0;     /* Display offset just after the user turn */
+static short sResponseLength = 0;     /* Bytes accumulated in sResponseBuffer */
+static char sResponseBuffer[kMaxResponseLength + 1];
+
+/* Set while the transcript is being rebuilt from history */
+static Boolean sRefreshing = false;
 
 /* Private function declarations */
 static void ChatWindow_Update(void);
@@ -38,12 +47,14 @@ static Boolean ChatWindow_HandleContentClick(Point localPt);
 static Boolean ChatWindow_HandleKeyDown(char key, Boolean isShiftDown, Boolean isCmdDown);
 static void FormatAndAddMessage(const char *message, Boolean isUserMessage);
 static void RefreshConversationDisplay(void);
+static void AppendDisplayText(const char *text, short len);
+static void CancelResponse(void);
 static void DrawChatInput(void);
 static void ClearChatInput(void);
 static pascal void ScrollAction(ControlHandle control, short part);
 
 /* Initialize and create the chat window */
-void ChatWindow_Initialize(void)
+Boolean ChatWindow_Initialize(void)
 {
     Rect windowRect, viewRect, destRect, scrollBarRect;
     short screenWidth, screenHeight, windowWidth, windowHeight;
@@ -51,18 +62,17 @@ void ChatWindow_Initialize(void)
 
     /* Prevent double initialization */
     if (sInitialized) {
-        return;
+        return true;
     }
 
     /* Initialize the AI models */
-    SetActiveAIModel(sActiveModel);
     InitModels();
 
     /* Check available memory */
     err = CheckMemory();
     if (err != noErr) {
         HandleError(kErrMemoryFull, kCtxOpeningChatWindow, false); /* Non-fatal */
-        return;
+        return false;
     }
 
     /* Calculate a window size that fits well on the screen */
@@ -80,7 +90,7 @@ void ChatWindow_Initialize(void)
 
     if (sWindow == NULL) {
         HandleError(kErrWindowCreation, kCtxOpeningChatWindow, false);
-        return;
+        return false;
     }
 
     SetPort(sWindow);
@@ -112,7 +122,7 @@ void ChatWindow_Initialize(void)
         HandleError(kErrTextEditCreation, kCtxCreatingResponseArea, false);
         DisposeWindow(sWindow);
         sWindow = NULL;
-        return;
+        return false;
     }
 
     /* Create the scroll bar */
@@ -135,7 +145,7 @@ void ChatWindow_Initialize(void)
         sWindow    = NULL;
         sDisplayTE = NULL;
         sScrollBar = NULL;
-        return;
+        return false;
     }
 
     /* Set standard text formatting */
@@ -149,6 +159,9 @@ void ChatWindow_Initialize(void)
 
     sInitialized = true;
     sIsVisible   = false;
+    sFocusTE     = sInputTE;
+
+    return true;
 }
 
 /* Dispose of the chat window and clean up resources */
@@ -157,6 +170,12 @@ void ChatWindow_Dispose(void)
     if (!sInitialized) {
         return;
     }
+
+    /* The quit path shuts the client down before disposing windows, so only
+       forget the request here rather than calling into a dead client. */
+    sAwaiting          = false;
+    sResponseLength    = 0;
+    sResponseBuffer[0] = '\0';
 
     /* Dispose resources in proper order */
     if (sInputTE != NULL) {
@@ -203,12 +222,9 @@ static pascal void ScrollAction(ControlHandle control, short part)
         return;
 
     /* Get line height */
-    lineHeight = 12;
-    if ((*sDisplayTE)->teLength > 0) {
-        lineHeight = TEGetHeight(0, 1, sDisplayTE);
-        if (lineHeight < 10)
-            lineHeight = 10;
-    }
+    lineHeight = (*sDisplayTE)->lineHeight;
+    if (lineHeight < 10)
+        lineHeight = 10;
 
     /* View height for page scrolling */
     viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
@@ -371,17 +387,15 @@ static Boolean ChatWindow_HandleContentClick(Point localPt)
         short oldSelStart = (*sDisplayTE)->selStart;
         short oldSelEnd   = (*sDisplayTE)->selEnd;
 
+        if (sInputTE != NULL) {
+            TEDeactivate(sInputTE);
+        }
         TEActivate(sDisplayTE);
         TEClick(localPt, false, sDisplayTE);
+        sFocusTE = sDisplayTE;
 
         Boolean selectionChanged =
             (oldSelStart != (*sDisplayTE)->selStart || oldSelEnd != (*sDisplayTE)->selEnd);
-
-        TEDeactivate(sDisplayTE);
-
-        if (sInputTE != NULL) {
-            TEActivate(sInputTE);
-        }
 
         ClipRect(&saveClip);
 
@@ -404,8 +418,12 @@ static Boolean ChatWindow_HandleContentClick(Point localPt)
         short oldSelStart = (*sInputTE)->selStart;
         short oldSelEnd   = (*sInputTE)->selEnd;
 
+        if (sDisplayTE != NULL) {
+            TEDeactivate(sDisplayTE);
+        }
         TEActivate(sInputTE);
         TEClick(localPt, false, sInputTE);
+        sFocusTE = sInputTE;
 
         if (oldSelStart != (*sInputTE)->selStart || oldSelEnd != (*sInputTE)->selEnd) {
             TEUpdate(&sInputRect, sInputTE);
@@ -451,10 +469,21 @@ static Boolean ChatWindow_HandleKeyDown(char key, Boolean isShiftDown, Boolean i
             }
             break;
 
-        case '.' /* Cmd-Period: Delete/Clear text */:
-            ChatWindow_ClearText();
+        case '.' /* Cmd-Period: cancel a request or clear text */:
+            if (sAwaiting) {
+                CancelResponse();
+            }
+            else {
+                ChatWindow_ClearText();
+            }
             return true;
         }
+    }
+
+    /* Enforce the prompt limit while typing instead of silently truncating */
+    if (key >= ' ' && (*sInputTE)->teLength >= kMaxPromptLength - 1) {
+        SysBeep(1);
+        return true;
     }
 
     /* Handle Return key */
@@ -486,8 +515,12 @@ static void ChatWindow_HandleActivate(Boolean becomingActive)
     }
 
     if (becomingActive) {
-        /* Window being activated */
-        if (sInputTE != NULL) {
+        /* Restore the insertion point to whichever field had it */
+        if (sFocusTE == sDisplayTE && sDisplayTE != NULL) {
+            TEActivate(sDisplayTE);
+        }
+        else if (sInputTE != NULL) {
+            sFocusTE = sInputTE;
             TEActivate(sInputTE);
         }
     }
@@ -530,7 +563,7 @@ static void ChatWindow_Render(void)
         short viewHeight = 0, textHeight = 0;
         if (sDisplayTE != NULL && *sDisplayTE != NULL) {
             viewHeight = (*sDisplayTE)->viewRect.bottom - (*sDisplayTE)->viewRect.top;
-            textHeight = TEGetHeight(0, (*sDisplayTE)->teLength, sDisplayTE);
+            textHeight = (short)((*sDisplayTE)->nLines * (*sDisplayTE)->lineHeight);
 
             /* Enable or disable scrollbar based on content */
             if (textHeight > viewHeight) {
@@ -615,6 +648,7 @@ static void ClearChatInput(void)
 
     TEActivate(sInputTE);
     TEUpdate(&frameRect, sInputTE);
+    sFocusTE = sInputTE;
 
     ClipRect(&saveClip);
 }
@@ -622,8 +656,9 @@ static void ClearChatInput(void)
 /* Format a new message with proper styling */
 static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
 {
-    char formattedMsg[kMaxPromptLength + 100]; /* Extra space for formatting */
-    short msgLength;
+    char formattedMsg[kMaxResponseLength + 8];
+    const char *prefix;
+    short prefixLen, msgLen, maxMsg;
     static Boolean isAdding = false;
 
     /* Prevent recursive calls */
@@ -631,116 +666,117 @@ static void FormatAndAddMessage(const char *message, Boolean isUserMessage)
         return;
     }
 
-    isAdding = true;
-
-    /* Safety check for message length */
-    if (strlen(message) == 0 || strlen(message) >= kMaxPromptLength) {
-        isAdding = false;
+    msgLen = (short)strlen(message);
+    if (msgLen == 0) {
         return;
     }
 
-    /* Check for auto-scroll */
-    Boolean scrollToBottom = true;
-    if (sScrollBar != NULL) {
-        short maxScroll    = GetControlMaximum(sScrollBar);
-        short oldScrollPos = GetControlValue(sScrollBar);
-        scrollToBottom     = (oldScrollPos >= maxScroll - 15);
+    prefix    = isUserMessage ? "You: " : "AI: ";
+    prefixLen = (short)strlen(prefix);
+
+    /* Leave room for the trailing CR and the terminating NUL */
+    maxMsg = (short)(sizeof(formattedMsg) - prefixLen - 2);
+    if (msgLen > maxMsg) {
+        msgLen = maxMsg;
     }
 
-    /* Format the message */
-    strcpy(formattedMsg, isUserMessage ? "You: " : "AI: ");
-    strcat(formattedMsg, message);
-    strcat(formattedMsg, "\r");
+    isAdding = true;
 
-    /* Apply text formatting */
-    TextFont(kFontMonaco);
-    TextSize(10);
-    TextFace(isUserMessage ? bold : normal);
+    memcpy(formattedMsg, prefix, (size_t)prefixLen);
+    memcpy(formattedMsg + prefixLen, message, (size_t)msgLen);
+    formattedMsg[prefixLen + msgLen]     = '\r';
+    formattedMsg[prefixLen + msgLen + 1] = '\0';
 
-    /* Use clipping to reduce flicker */
-    GrafPtr savePort;
-    Rect saveClip;
-    GetPort(&savePort);
-    saveClip = savePort->clipRgn[0]->rgnBBox;
-    ClipRect(&sDisplayRect);
+    /* A transcript cannot grow past TextEdit's 16-bit length field. When it
+       would, rebuild from history (which keeps the newest messages) first. */
+    if (!sRefreshing && (*sDisplayTE)->teLength + prefixLen + msgLen + 1 > 30000) {
+        RefreshConversationDisplay();
+    }
 
-    /* Insert the message at the end */
-    msgLength = strlen(formattedMsg);
-    TESetSelect(32767, 32767, sDisplayTE);
-    TEInsert(formattedMsg, msgLength, sDisplayTE);
-
-    /* Update scrollbar and scroll to bottom if needed */
-    UpdateTextScrollbar(sDisplayTE, sScrollBar, scrollToBottom);
-
-    /* Ensure display never shows cursor */
-    TEDeactivate(sDisplayTE);
-
-    /* Redraw the display area */
-    InvalRect(&sDisplayRect);
-
-    /* Restore clipping */
-    ClipRect(&saveClip);
+    AppendDisplayText(formattedMsg, (short)(prefixLen + msgLen + 1));
 
     isAdding = false;
+}
+
+/* Append text to the end of the display record, bounded by TextEdit's 16-bit
+   length field. The caller is responsible for rebuilding from history when a
+   whole message no longer fits. */
+static void AppendDisplayText(const char *text, short len)
+{
+    short teLen, room;
+
+    if (sDisplayTE == NULL || *sDisplayTE == NULL || text == NULL || len <= 0) {
+        return;
+    }
+
+    teLen = (*sDisplayTE)->teLength;
+    room  = (short)(30000 - teLen);
+    if (room <= 0) {
+        return;
+    }
+    if (len > room) {
+        len = room;
+    }
+
+    TESetSelect(teLen, teLen, sDisplayTE);
+    TEInsert(text, len, sDisplayTE);
+
+    /* The display is a transcript, never an editing target while streaming */
+    TEDeactivate(sDisplayTE);
+
+    UpdateTextScrollbar(sDisplayTE, sScrollBar, true);
+    InvalRect(&sDisplayRect);
 }
 
 /* Function to toggle between AI models */
 void ChatWindow_ToggleAIModel(void)
 {
-    char modelMsg[100];
+    const char *modelMsg;
 
     if (!sInitialized || !sIsVisible) {
         return;
     }
 
     /* Toggle the model */
-    if (sActiveModel == kMarkovModel) {
-        sActiveModel = kOpenAIModel;
+    if (gActiveAIModel == kMarkovModel) {
+        SetActiveAIModel(kRemoteModel);
     }
-    else if (sActiveModel == kOpenAIModel) {
-        sActiveModel = kTemplateModel;
+    else if (gActiveAIModel == kRemoteModel) {
+        SetActiveAIModel(kTemplateModel);
     }
     else {
-        sActiveModel = kMarkovModel;
+        SetActiveAIModel(kMarkovModel);
     }
-
-    /* Update model selection */
-    SetActiveAIModel(sActiveModel);
 
     /* Inform the user about the change */
-    if (sActiveModel == kMarkovModel) {
-        strcpy(modelMsg, "Switched to Markov chain model.");
-    }
-    else if (sActiveModel == kOpenAIModel) {
-        strcpy(modelMsg, "Switched to OpenAI model.");
-    }
-    else if (sActiveModel == kTemplateModel) {
-        strcpy(modelMsg, "Switched to Template-based model.");
+    switch (gActiveAIModel) {
+    case kMarkovModel:
+        modelMsg = "Switched to Markov chain model.";
+        break;
+    case kRemoteModel:
+        modelMsg = "Switched to remote AI model.";
+        break;
+    default:
+        modelMsg = "Switched to Template-based model.";
+        break;
     }
 
     /* Add message to chat window */
     FormatAndAddMessage(modelMsg, false);
-
-    /* Ensure the message is visible */
-    if (sWindow != NULL) {
-        InvalRect(&sDisplayRect);
-    }
 }
 
 /* Refresh the conversation history display */
 static void RefreshConversationDisplay(void)
 {
     short i, idx;
-    short maxMessages           = gConversationHistory.count;
-    static Boolean isRefreshing = false;
+    short maxMessages = gConversationHistory.count;
 
     /* Prevent recursive refreshes */
-    if (isRefreshing || !sInitialized || sDisplayTE == NULL || *sDisplayTE == NULL) {
-        isRefreshing = false;
+    if (sRefreshing || !sInitialized || sDisplayTE == NULL || *sDisplayTE == NULL) {
         return;
     }
 
-    isRefreshing = true;
+    sRefreshing = true;
 
     /* Use clipping to reduce flicker */
     GrafPtr savePort;
@@ -753,16 +789,24 @@ static void RefreshConversationDisplay(void)
     /* Clear the text display */
     TESetText("", 0, sDisplayTE);
 
-    /* Build up text content */
+    /* Build up text content, newest messages last */
     for (i = 0; i < maxMessages; i++) {
         /* Calculate index using circular buffer logic */
         idx = (gConversationHistory.head + i) % kMaxConversationHistory;
 
         ConversationMessage *msg = &gConversationHistory.messages[idx];
-        if (msg->text[0] != '\0') {
-            /* Add message to display */
-            FormatAndAddMessage(msg->text, (msg->type == kUserMessage));
+        if (msg->text[0] == '\0') {
+            continue;
         }
+
+        /* Stop before TextEdit's 16-bit length field overflows */
+        if ((*sDisplayTE)->teLength > 28000) {
+            AppendDisplayText("\r[history truncated]\r", 21);
+            break;
+        }
+
+        /* Add message to display */
+        FormatAndAddMessage(msg->text, (msg->type == kUserMessage));
     }
 
     /* Ensure display is deactivated */
@@ -772,23 +816,27 @@ static void RefreshConversationDisplay(void)
     ClipRect(&saveClip);
     InvalRect(&sDisplayRect);
 
-    isRefreshing = false;
+    sRefreshing = false;
 }
 
 /* Send a message from the chat input field */
 void ChatWindow_SendMessage(void)
 {
     char promptBuffer[kMaxPromptLength];
-    char *response;
-    short thinkingMsgStart = 0;
-    short thinkingMsgEnd   = 0;
+    short promptLen;
 
     if (!sInitialized || sWindow == NULL || sInputTE == NULL || sDisplayTE == NULL) {
         return;
     }
 
+    /* One request at a time */
+    if (sAwaiting) {
+        SysBeep(1);
+        return;
+    }
+
     /* Get the user's prompt */
-    int promptLen = (*sInputTE)->teLength;
+    promptLen = (*sInputTE)->teLength;
     if (promptLen <= 0) {
         return; /* Empty prompt */
     }
@@ -799,19 +847,18 @@ void ChatWindow_SendMessage(void)
     }
 
     memset(promptBuffer, 0, kMaxPromptLength);
-    if ((*sInputTE)->hText != NULL && *(*sInputTE)->hText != NULL) {
-        BlockMoveData(*(*sInputTE)->hText, promptBuffer, promptLen);
-        promptBuffer[promptLen] = '\0';
-
-        /* Trim leading and trailing whitespace */
-        TrimWhitespace(promptBuffer);
-
-        /* Check if the message is now empty after trimming */
-        if (promptBuffer[0] == '\0') {
-            return; /* Empty prompt after trimming */
-        }
+    if ((*sInputTE)->hText == NULL || *(*sInputTE)->hText == NULL) {
+        return;
     }
-    else {
+
+    BlockMoveData(*(*sInputTE)->hText, promptBuffer, promptLen);
+    promptBuffer[promptLen] = '\0';
+
+    /* Trim leading and trailing whitespace */
+    TrimWhitespace(promptBuffer);
+
+    /* Check if the message is now empty after trimming */
+    if (promptBuffer[0] == '\0') {
         return;
     }
 
@@ -824,39 +871,46 @@ void ChatWindow_SendMessage(void)
     /* Add the user message to display */
     FormatAndAddMessage(promptBuffer, true);
 
-    /* Add "Thinking..." indicator */
-    FormatAndAddMessage("Processing your query...", false);
+    /* The Models menu picks which engine answers. Markov and Template are the
+       offline models: they need no network and no API key, and they are what a
+       Mac without Open Transport or without a key can still use. Remote AI is
+       the streaming HTTPS client. */
+    if (gActiveAIModel != kRemoteModel) {
+        char *response = GenerateAIResponse(&gConversationHistory);
 
-    /* Remember where thinking message ends */
-    if (sDisplayTE != NULL && *sDisplayTE != NULL) {
-        thinkingMsgEnd = (*sDisplayTE)->teLength;
-    }
-
-    /* Generate AI response */
-    response = GenerateAIResponse(&gConversationHistory);
-
-    /* Remove thinking message and add real response */
-    if (sDisplayTE != NULL && *sDisplayTE != NULL) {
-        /* Safely remove thinking message */
-        short origLength = (*sDisplayTE)->teLength;
-        char *text       = (char *)*(*sDisplayTE)->hText;
-        char *thinksPos  = strstr(text, "AI: Processing your query...");
-
-        if (thinksPos != NULL) {
-            long offset = thinksPos - text;
-
-            /* Delete the thinking message */
-            TESetSelect(offset, offset + strlen("AI: Processing your query..."), sDisplayTE);
-            TEDelete(sDisplayTE);
+        if (response == NULL || response[0] == '\0') {
+            response = "Error: the local model returned nothing";
         }
+
+        AppendDisplayText("AI: ", 4);
+        AppendDisplayText(response, (short)strlen(response));
+        AppendDisplayText("\r", 1);
+        AddAIResponse(response);
+        return;
     }
 
-    /* Add the real response */
-    AddAIResponse(response);
-    FormatAndAddMessage(response, false);
+    /* Start the request before writing into the transcript so a failure can be
+       reported in place of the response body */
+    if (!API_BeginRequest()) {
+        const char *err = API_LastError();
 
-    /* Update display */
-    InvalRect(&sDisplayRect);
+        if (err == NULL) {
+            err = "request failed";
+        }
+
+        AppendDisplayText("AI: ", 4);
+        AppendDisplayText(err, (short)strlen(err));
+        AppendDisplayText("\r", 1);
+        return;
+    }
+
+    /* Remember where the response starts so it can be cancelled cleanly */
+    sResponseStart  = (*sDisplayTE)->teLength;
+    sResponseLength = 0;
+    sResponseBuffer[0] = '\0';
+
+    AppendDisplayText("AI: ", 4);
+    sAwaiting = true;
 }
 
 /* Add a message to the chat display */
@@ -872,12 +926,40 @@ void ChatWindow_AddMessage(const char *message, Boolean isUserMessage)
 /* Handle all events for the chat window */
 void ChatWindow_HandleEvent(EventRecord *event)
 {
-    if (!sIsVisible || sWindow == NULL) {
+    GrafPtr savePort;
+
+    if (sWindow == NULL) {
         return;
     }
 
+    /* Updates must always be balanced, even when the window is hidden */
+    if (event->what == updateEvt) {
+        if ((WindowPtr)event->message != sWindow) {
+            return;
+        }
+        if (sIsVisible) {
+            ChatWindow_Update();
+        }
+        else {
+            GetPort(&savePort);
+            SetPort(sWindow);
+            BeginUpdate(sWindow);
+            EndUpdate(sWindow);
+            SetPort(savePort);
+        }
+        return;
+    }
+
+    if (!sIsVisible) {
+        return;
+    }
+
+    GetPort(&savePort);
+    SetPort(sWindow);
+
     switch (event->what) {
-    case keyDown: {
+    case keyDown:
+    case autoKey: {
         char key            = event->message & charCodeMask;
         Boolean isShiftDown = (event->modifiers & shiftKey) != 0;
         Boolean isCmdDown   = (event->modifiers & cmdKey) != 0;
@@ -886,36 +968,40 @@ void ChatWindow_HandleEvent(EventRecord *event)
     }
 
     case mouseDown: {
-        Point mousePt = event->where;
-        GlobalToLocal(&mousePt);
-        ChatWindow_HandleContentClick(mousePt);
-        break;
-    }
+        WindowRef window;
+        Point mousePt;
 
-    case activateEvt: {
-        Boolean becomingActive = (event->modifiers & activeFlag) != 0;
-        ChatWindow_HandleActivate(becomingActive);
-        break;
-    }
-
-    case updateEvt:
-        if ((WindowPtr)event->message == sWindow) {
-            ChatWindow_Update();
+        /* Only clicks that really land in this window belong to us */
+        if (FindWindow(event->where, &window) == inContent && window == sWindow) {
+            mousePt = event->where;
+            GlobalToLocal(&mousePt);
+            ChatWindow_HandleContentClick(mousePt);
         }
         break;
     }
+
+    case activateEvt:
+        if ((WindowPtr)event->message == sWindow) {
+            ChatWindow_HandleActivate((event->modifiers & activeFlag) != 0);
+        }
+        break;
+    }
+
+    SetPort(savePort);
 }
 
 /* Show or hide the chat window */
-void ChatWindow_Show(Boolean visible)
+Boolean ChatWindow_Show(Boolean visible)
 {
     if (!sInitialized || sWindow == NULL) {
-        return;
+        return false;
     }
 
     if (visible) {
-        /* Refresh conversation display */
-        RefreshConversationDisplay();
+        /* Refresh conversation display unless a response is streaming */
+        if (!sAwaiting) {
+            RefreshConversationDisplay();
+        }
 
         /* Show window */
         ShowWindow(sWindow);
@@ -932,13 +1018,19 @@ void ChatWindow_Show(Boolean visible)
         sIsVisible = true;
     }
     else {
+        /* Abandon an in-flight request rather than leaving it running unseen */
+        if (sAwaiting) {
+            CancelResponse();
+        }
+
         HideWindow(sWindow);
         sIsVisible = false;
 
         /* Reset chat history */
-        SetActiveAIModel(sActiveModel);
         InitModels();
     }
+
+    return true;
 }
 
 /* Get the window reference for the chat window */
@@ -950,7 +1042,7 @@ WindowRef ChatWindow_GetWindowRef(void)
 /* Private helper functions for menu integration */
 static Boolean IsDisplayActive(void)
 {
-    if (sDisplayTE == NULL || *sDisplayTE == NULL)
+    if (sDisplayTE == NULL || *sDisplayTE == NULL || sFocusTE != sDisplayTE)
         return false;
 
     /* Check if display has a selection */
@@ -959,11 +1051,10 @@ static Boolean IsDisplayActive(void)
 
 static Boolean IsInputActive(void)
 {
-    if (sInputTE == NULL || *sInputTE == NULL)
+    if (sInputTE == NULL || *sInputTE == NULL || sFocusTE != sInputTE)
         return false;
 
-    /* Check if input field is active or has selection */
-    return ((*sInputTE)->selStart < (*sInputTE)->selEnd) || ((*sInputTE)->active != 0);
+    return true;
 }
 
 /* Get the active TEHandle for text operations */
@@ -973,7 +1064,9 @@ TEHandle ChatWindow_GetActiveTE(void)
     if (IsDisplayActive())
         return sDisplayTE;
 
-    /* Otherwise return input field if available */
+    /* Otherwise return the focused field, or the input field */
+    if (sFocusTE == sDisplayTE && sDisplayTE != NULL)
+        return sDisplayTE;
     if (sInputTE != NULL)
         return sInputTE;
 
@@ -1039,15 +1132,98 @@ Boolean ChatWindow_IsVisible(void)
     return sIsVisible;
 }
 
-/* Perform idle processing */
+/* Abandon the in-flight request and remove its partial output */
+static void CancelResponse(void)
+{
+    short teLen;
+
+    if (!sAwaiting) {
+        return;
+    }
+
+    API_Cancel();
+
+    sAwaiting          = false;
+    sResponseLength    = 0;
+    sResponseBuffer[0] = '\0';
+
+    if (sDisplayTE == NULL || *sDisplayTE == NULL) {
+        return;
+    }
+
+    teLen = (*sDisplayTE)->teLength;
+    if (sResponseStart >= 0 && sResponseStart <= teLen) {
+        TESetSelect(sResponseStart, teLen, sDisplayTE);
+        TEDelete(sDisplayTE);
+        UpdateTextScrollbar(sDisplayTE, sScrollBar, true);
+        InvalRect(&sDisplayRect);
+    }
+}
+
+/* Perform idle processing: drive the streaming request */
 void ChatWindow_Idle(void)
 {
+    char chunk[128];
+    short received;
+    APIState state;
+
     if (!sInitialized || sWindow == NULL || !sIsVisible) {
         return;
     }
 
-    /* Only do idle processing for input field - this is where cursor blinks */
-    if (sInputTE != NULL) {
+    /* Cursor blinking for the field that owns the insertion point */
+    if (sFocusTE != NULL) {
+        TEIdle(sFocusTE);
+    }
+    else if (sInputTE != NULL) {
         TEIdle(sInputTE);
+    }
+
+    if (!sAwaiting) {
+        return;
+    }
+
+    /* Drain everything the client has decoded since the last poll */
+    while ((received = API_Poll(chunk, (short)sizeof(chunk))) > 0) {
+        short room = (short)(kMaxResponseLength - sResponseLength);
+        short copy = received;
+
+        if (copy > room) {
+            copy = room;
+        }
+
+        if (copy > 0) {
+            memcpy(sResponseBuffer + sResponseLength, chunk, (size_t)copy);
+            sResponseLength += copy;
+            sResponseBuffer[sResponseLength] = '\0';
+            AppendDisplayText(chunk, copy);
+        }
+    }
+
+    state = API_State();
+
+    if (state == kAPIStateDone) {
+        AppendDisplayText("\r", 1);
+        if (sResponseLength > 0) {
+            AddAIResponse(sResponseBuffer);
+        }
+        sAwaiting          = false;
+        sResponseLength    = 0;
+        sResponseBuffer[0] = '\0';
+    }
+    else if (state == kAPIStateError) {
+        const char *err = API_LastError();
+
+        if (err == NULL) {
+            err = "request failed";
+        }
+
+        AppendDisplayText("\rError: ", 8);
+        AppendDisplayText(err, (short)strlen(err));
+        AppendDisplayText("\r", 1);
+
+        sAwaiting          = false;
+        sResponseLength    = 0;
+        sResponseBuffer[0] = '\0';
     }
 }

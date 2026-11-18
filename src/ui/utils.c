@@ -1,3 +1,4 @@
+#include <ControlDefinitions.h>
 #include <Controls.h>
 #include <Fonts.h>
 #include <Memory.h>
@@ -74,9 +75,9 @@ void UpdateTextScrollbar(TEHandle textHandle, ControlHandle scrollBar, Boolean s
         return;
     }
 
-    /* Calculate scroll values */
+    /* Calculate scroll values; nLines * lineHeight avoids an O(lines) walk */
     viewHeight = (*textHandle)->viewRect.bottom - (*textHandle)->viewRect.top;
-    textHeight = TEGetHeight(0, (*textHandle)->teLength, textHandle);
+    textHeight = (short)((*textHandle)->nLines * (*textHandle)->lineHeight);
 
     /* Calculate maximum scroll value */
     maxScroll = 0;

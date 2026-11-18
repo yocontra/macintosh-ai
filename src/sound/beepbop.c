@@ -52,6 +52,12 @@ void BeepBopInit(void)
     gPlayback.isPlaying          = false;
     gPlayback.soundInitialized   = false;
 
+    /* Release a channel left over from a previous initialization */
+    if (gSoundChannel != NULL) {
+        SndDisposeChannel(gSoundChannel, false);
+        gSoundChannel = NULL;
+    }
+
     /* Create a new sound channel with square wave synthesis */
     error = SndNewChannel(&gSoundChannel, squareWaveSynth, 0, NULL);
     if (error != noErr) {

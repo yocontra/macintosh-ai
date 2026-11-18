@@ -5,7 +5,7 @@
 #include <Windows.h>
 
 /* Window types */
-enum { kWindowTypeSplash = 0, kWindowTypeChat = 1, kWindowTypeAbout = 2 };
+enum { kWindowTypeSplash = 0, kWindowTypeChat = 1 };
 typedef unsigned short WindowType;
 
 /* Common window module interface */
@@ -13,23 +13,25 @@ typedef struct {
     WindowRef window;
     Boolean initialized;
     Boolean visible;
-    void (*initialize)(void);
+    Boolean (*initialize)(void);
     void (*dispose)(void);
-    void (*show)(Boolean);
+    Boolean (*show)(Boolean);
     void (*handleEvent)(EventRecord *);
     void (*update)(void);
     WindowRef (*getWindowRef)(void);
     Boolean (*isVisible)(void);
 } WindowModule;
 
-/* Initialize the window manager and the initial window */
-void WindowManager_Initialize(void);
+/* Initialize the window manager and the initial window.
+   Returns false when the splash window could not be created. */
+Boolean WindowManager_Initialize(void);
 
 /* Dispose all windows and clean up resources */
 void WindowManager_Dispose(void);
 
-/* Open a specific type of window */
-void WindowManager_OpenWindow(WindowType windowType);
+/* Open a specific type of window, creating it on first use.
+   Returns false when the window could not be created or shown. */
+Boolean WindowManager_OpenWindow(WindowType windowType);
 
 /* Close a specific type of window */
 void WindowManager_CloseWindow(WindowType windowType);
@@ -48,8 +50,5 @@ Boolean WindowManager_IsWindowVisible(WindowType windowType);
 
 /* Handle all event types and route to appropriate handler */
 void WindowManager_HandleEvent(EventRecord *event);
-
-/* Perform idle-time processing */
-void WindowManager_Idle(void);
 
 #endif /* WINDOW_MANAGER_H */

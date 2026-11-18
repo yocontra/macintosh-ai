@@ -1,78 +1,154 @@
-![Screenshot 2025-03-30 at 7 56 10 PM](https://github.com/user-attachments/assets/7071c62a-cf1f-4234-aa87-e09ee83c194d)
-![Screenshot 2025-03-30 at 7 56 35 PM](https://github.com/user-attachments/assets/14663d3e-7c8e-4213-b2d2-0cf73ef832ac)
+# Macintosh AI
 
-## AI for Macintosh
+An AI chat client for a 68k Classic Macintosh. It talks to Anthropic or OpenAI
+over HTTPS directly from System 7 — no bridge machine, no proxy — and falls
+back to two offline models when there is no network.
 
-Provides an interface to use AI on a classic Macintosh (built for System 7.0.1 - should work on others).
+## What works
 
-### Requirements
+- **Remote AI, streamed.** Requests go out from the Mac over TLS 1.3 using a
+  vendored, 68k-tuned mbedTLS 3.2.1 stack (the engine behind
+  [Claude 68](https://github.com/SLKK-design/Claude68)). Tokens are decoded as
+  they arrive from the Server-Sent Events stream and appear in the chat window
+  as they are produced, so the UI never blocks on the network.
+- **Two providers.** Anthropic (`POST /v1/messages`) and OpenAI
+  (`POST /v1/chat/completions`, any OpenAI-compatible base URL that presents a
+  Google Trust Services WE1 certificate).
+- **Offline fallbacks.** A Markov chain and a template/pattern model still run
+  with no network at all. Pick one from the **Models** menu.
+- **Settings that persist.** File ▸ Settings… stores provider, model, API key
+  and base URL in `MacintoshAI Prefs` in the Preferences folder.
 
-- [Retro68](https://github.com/autc04/Retro68) toolchain for cross-compiling to classic Mac OS
-- [Mini vMac](https://www.gryphel.com/c/minivmac/) or [Basilisk II](https://basilisk.cebix.net/) for running the application
-- [clang-format](https://clang.llvm.org/docs/ClangFormat.html) and [clang-tidy](https://clang.llvm.org/extra/clang-tidy/) for code formatting and static analysis (optional)
+## Requirements
 
-### Building and Running
+| | |
+|---|---|
+| CPU | 68020 or later (the TLS engine uses 68020 multiply instructions) |
+| RAM | 8 MB minimum; the app asks for a 3 MB partition |
+| System | System 7.5.3 or later |
+| Network | Open Transport 1.3 or later, with TCP/IP configured |
 
-This project uses a simple Makefile for common operations:
+The 3 MB partition is not generous: the offline Markov and template models are
+about 940 KB of statics, the 68k code is another 600 KB, and the engine reserves
+128 KB of stack before enlarging the heap. A 2 MB partition makes Mac OS 9 fail
+the launch at startup with no alert, which is what the emulator test caught.
+
+Open Transport is the supported transport. A MacTCP build remains available for
+7.0.1 machines (`make build NET68K_TRANSPORT=mactcp`); it is not exercised by
+CI and is not tested here — use it only if you must.
+
+## Download
+
+Every tagged release on the
+[Releases page](../../releases) contains:
+
+- `MacintoshAI.dsk` — a bootable/installable disk image; open it with an
+  emulator or copy `MacintoshAI` onto a real Mac.
+- `MacintoshAI.bin` — the raw application, for `LaunchAPPL`, emulators, or
+  disk-image tools.
+- `MacintoshAI-<tag>-68k.sit` — a StuffIt archive that preserves the resource
+  fork, which is what you want when downloading onto a modern machine and
+  moving the file to a Mac.
+
+A bare `.dsk` cannot be opened from a browser on a modern Mac; use the `.sit`.
+
+## Building
+
+All builds run inside the Retro68 cross-compiler image. A clean tree, one
+command:
 
 ```bash
-# Build the application
-make build
+docker run --rm \
+  -v "$PWD:/root/work" \
+  -v "$HOME/Documents/SendToMacOS9:/ial:ro" \
+  -w /root/work \
+  -e APP_VERSION_STR="$(git describe --tags --always --dirty)" \
+  ghcr.io/autc04/retro68 bash -lc \
+  'make build APP_NAME=MacintoshAI \
+     IAL_DIR="/ial/MPW/MPW-GM+PR+Final Updates/Interfaces&Libraries"'
+```
 
-# Run the application in Mini vMac
-make run
+Artifacts land in `dist/`: `MacintoshAI.dsk` (800K HFS image with the app),
+`MacintoshAI.bin` (MacBinary, the application itself), and the AppleDouble
+`%MacintoshAI.ad` that carries the resource fork. (`MacintoshAI.APPL` in the
+build directory is an empty placeholder, not the app.)
 
-# Clean build artifacts
+The build first stages Apple's Universal Interfaces & Libraries into the
+Retro68 toolchain and builds **everything** against them. That is not
+optional: Retro68 ships only the open-source Multiversal subset (44 headers),
+which has no `Controls.h`, `Lists.h`, `Scrap.h`, `Script.h` or `Threads.h`,
+and no `MacTCP.h` or Open Transport at all. `make universal` does the staging;
+`make build` depends on it.
+
+The default `IAL_DIR` is
+`$HOME/Documents/SendToMacOS9/MPW/MPW-GM+PR+Final Updates/Interfaces&Libraries`;
+override it when yours lives elsewhere. On macOS, `$HOME/Documents` is often
+shared into the emulator image as `/Users/<you>/Documents`, so the mount above
+is a one-liner only if you keep that layout — adjust the two paths together.
+
+On a machine with Retro68 installed natively:
+
+```bash
+make build      # cmake configure + build, then copy artifacts to dist/
+make universal  # re-stage Apple's Universal Interfaces (only when needed)
+make debug-build
+make run        # LaunchAPPL -e minivmac, if LaunchAPPL.cfg is set up
 make clean
-
-# Format all C/C++ code
-make format
-
-# Run static analysis on all C/C++ code
-make lint
+make format     # clang-format
+make lint       # clang-tidy over the compilation database
 ```
 
-You can find the output .dsk and .bin files in the `dist/` folder. Simply drag the .dsk file onto your Mini vMac to test.
-
-#### Other Build Parameters
+Host unit tests for the stream decoder and other Toolbox-free logic:
 
 ```bash
-# Specify a custom Retro68 build path
-make build RETRO68_PATH=/path/to/Retro68-build
-
-# Use Basilisk II instead of Mini vMac
-make run USE_BASILISK=ON
-
-# Change the application name (default is "App")
-make build APP_NAME=MyApp
-
-# Combine options
-make build RETRO68_PATH=/path/to/Retro68-build USE_BASILISK=ON APP_NAME=MyApp
+tests/host/run.sh
 ```
 
-### Using `make run`
+## Using it
 
-You will need to set up LaunchAPPL.cfg as documented [here](https://github.com/autc04/Retro68/tree/3672e5e663802e1956407065c75d2aff130ae50e?tab=readme-ov-file#launchappl-and-the-test-suite). Currently this supports Mini vMac and Basilisk II (I personally use Mini vMac for simplicity).
+Start the app, click **Start Chat**, pick a model from the **Models** menu:
+Remote AI uses the configured provider, Markov and Template work offline.
 
-This doesn't seem to work super well for Mini vMac at the moment due to how it copies the .app file and Gatekeeper on modern macOS.
+**File ▸ Settings…** (⌘,) opens the settings dialog:
 
-### Code Style & Linting
+- **Provider** — `anthropic` or `openai`, case-insensitive.
+- **Model** — e.g. `claude-sonnet-4-5` or `gpt-4o-mini`.
+- **API key** — paste it with the keyboard; nothing is echoed beyond the field.
+- **Base URL** — leave empty for the provider default. Only `https://` URLs are
+  accepted. A host outside the Google Trust Services chain will fail
+  certificate verification, because that is the only trust anchor compiled in.
 
-This project uses clang-format and clang-tidy to maintain code quality:
+## Security limitations
 
-- **clang-format**: A tool to automatically format C/C++ code according to configurable style guides
-- **clang-tidy**: A static analysis tool that provides additional diagnostics beyond what the compiler offers
+Read these before putting a real key in:
 
-Configuration files:
-- `.clang-format`: Defines the C/C++ code style (indentation, spacing, etc.)
-- `.clang-tidy`: Defines static analysis rules and checks
+- **The API key is stored in plain text** in `MacintoshAI Prefs` on the Mac.
+  Without the Keychain there is nothing better available on System 7; treat the
+  machine as holding the secret.
+- **The trust anchor is the Google Trust Services WE1 intermediate**, pinned
+  directly (computing the P-384 root signature does not fit in the handshake
+  budget). `api.anthropic.com` and `api.openai.com` chain through it today, but
+  the pinned certificate **expires 2029-02-20**. After that date the app cannot
+  connect until the anchor is replaced with a new build.
+- **Certificate dates are not checked** (`MBEDTLS_HAVE_TIME_DATE` is off) and
+  there is **no revocation checking**. The pinned anchor limits the blast
+  radius, but an expired WE1 certificate would still be accepted before its
+  removal, and a revoked one would too.
+- A custom `base_url` must present a certificate chaining to WE1; anything else
+  fails closed with "TLS: certificate not trusted".
 
-You can run the formatting and linting tools through:
-1. Makefile targets: `make format` and `make lint`
-2. CMake targets: `cmake --build build --target format` and `cmake --build build --target lint`
+## Repository layout
 
-When contributing to this project, please format your code before submitting changes:
-```bash
-# Format all C/C++ files according to the project style
-make format
 ```
+src/            application (UI, chat models, prefs, API client)
+libs/net68k/    vendored TLS/HTTP engine, Open Transport + MacTCP transports
+tests/host/     Toolbox-free unit tests
+tests/emulator/ SheepShaver-driven smoke tests (local only)
+```
+
+Third-party components and their licenses are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -27,7 +27,7 @@ enum {
 
     /* Models menu items */
     kItemMarkovModel   = 1,
-    kItemOpenAIModel   = 2,
+    kItemRemoteModel   = 2,
     kItemTemplateModel = 3,
     
     /* Extras menu items */
@@ -37,6 +37,9 @@ enum {
     kAboutBoxID   = 128,
     kMainWindowID = 129,
     kChatWindowID = 130,
+
+    /* Dialog resource IDs */
+    kSettingsDialogID = 140,
 
     /* Button resource ID and value */
     kStartChatBtn = 128
@@ -48,16 +51,20 @@ enum {
     kModeChatWindow = 1  /* Chat window is active */
 };
 
-/* Control constants */
-#define pushButProc 0
-#define scrollBarProc 16
-
 /* Control part codes (Toolbox constants that may not be in headers) */
 #ifndef inUpButton
 #define inUpButton 20
+#endif
+#ifndef inDownButton
 #define inDownButton 21
+#endif
+#ifndef inPageUp
 #define inPageUp 22
+#endif
+#ifndef inPageDown
 #define inPageDown 23
+#endif
+#ifndef inThumb
 #define inThumb 129
 #endif
 
@@ -105,9 +112,10 @@ enum {
 
 /* Chat UI constants */
 enum {
-    kMaxPromptLength   = 256,
-    kMaxResponseLength = 4096,
-    kMaxResponses      = 20, /* Maximum number of responses in a conversation */
+    kMaxPromptLength     = 256,
+    kMaxResponseLength   = 4096,
+    kMaxConversationText = 1024, /* Per-message size in gConversationHistory */
+    kMaxResponses        = 20,   /* Maximum number of responses in a conversation */
     kPromptMargin      = 10,
     kResponseMargin    = 10,
     kChatBoxPadding    = 5,

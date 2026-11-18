@@ -1,3 +1,4 @@
+#include <ControlDefinitions.h>
 #include <Controls.h>
 #include <Events.h>
 #include <Fonts.h>
@@ -138,7 +139,7 @@ static void DrawSplashWindowUI(WindowPtr window)
 }
 
 /* Initialize and create the splash window */
-void SplashWindow_Initialize(void)
+Boolean SplashWindow_Initialize(void)
 {
     Rect screenRect, windowRect, frameRect, buttonRect;
     short screenWidth, screenHeight;
@@ -147,14 +148,14 @@ void SplashWindow_Initialize(void)
 
     /* Prevent double initialization */
     if (sInitialized) {
-        return;
+        return true;
     }
 
     /* Check available memory */
     err = CheckMemory();
     if (err != noErr) {
         HandleError(kErrMemoryFull, kCtxCreatingMainWindow, false); /* Non-fatal */
-        return;
+        return false;
     }
 
     /* Calculate screen dimensions */
@@ -177,7 +178,7 @@ void SplashWindow_Initialize(void)
 
     if (sWindow == NULL) {
         HandleError(kErrWindowCreation, kCtxCreatingMainWindow, false); /* Non-fatal */
-        return;
+        return false;
     }
 
     /* Make window visible and active */
@@ -211,6 +212,8 @@ void SplashWindow_Initialize(void)
     InvalRect(&sWindow->portRect);
 
     sInitialized = true;
+
+    return true;
 }
 
 /* Dispose of the splash window and clean up resources */
@@ -282,14 +285,10 @@ Boolean SplashWindow_HandleContentClick(Point localPt)
     /* Find which control was clicked */
     part = FindControl(localPt, sWindow, &control);
 
-    /* If Start Chat button was clicked */
+    /* Track the button so it highlights until the mouse is released; only a
+       release inside the button counts as a click. */
     if (part && control == sStartChatButton) {
-        /* Visual feedback */
-        HiliteControl(control, 1); /* Highlight button */
-        Delay(8, NULL);            /* Short delay */
-        HiliteControl(control, 0); /* Return to normal */
-
-        return true; /* Indicate button was clicked */
+        return TrackControl(control, localPt, NULL) != 0;
     }
 
     return false; /* No button click handled */
@@ -298,18 +297,37 @@ Boolean SplashWindow_HandleContentClick(Point localPt)
 /* Handle all events for the splash window */
 void SplashWindow_HandleEvent(EventRecord *event)
 {
-    if (!sIsVisible || sWindow == NULL) {
+    GrafPtr savePort;
+
+    if (sWindow == NULL) {
         return;
     }
 
+    if (!sIsVisible) {
+        return;
+    }
+
+    GetPort(&savePort);
+    SetPort(sWindow);
+
     switch (event->what) {
     case mouseDown: {
-        Point mousePt = event->where;
-        GlobalToLocal(&mousePt);
-        if (SplashWindow_HandleContentClick(mousePt)) {
-            /* If the start chat button was clicked, open the chat window */
-            WindowManager_OpenWindow(kWindowTypeChat);
-            WindowManager_CloseWindow(kWindowTypeSplash);
+        WindowRef window;
+        Point mousePt;
+
+        /* Only clicks that really land in this window belong to us */
+        if (FindWindow(event->where, &window) == inContent && window == sWindow) {
+            mousePt = event->where;
+            GlobalToLocal(&mousePt);
+            if (SplashWindow_HandleContentClick(mousePt)) {
+                /* If the start chat button was clicked, open the chat window */
+                if (WindowManager_OpenWindow(kWindowTypeChat)) {
+                    WindowManager_CloseWindow(kWindowTypeSplash);
+                }
+                else {
+                    HandleError(kErrWindowCreation, kCtxOpeningChatWindow, false);
+                }
+            }
         }
     } break;
 
@@ -323,6 +341,8 @@ void SplashWindow_HandleEvent(EventRecord *event)
         /* Splash window doesn't handle other event types */
         break;
     }
+
+    SetPort(savePort);
 }
 
 /* Get the window reference for the splash window */
@@ -332,10 +352,10 @@ WindowRef SplashWindow_GetWindowRef(void)
 }
 
 /* Show or hide the splash window */
-void SplashWindow_Show(Boolean visible)
+Boolean SplashWindow_Show(Boolean visible)
 {
     if (!sInitialized || sWindow == NULL) {
-        return;
+        return false;
     }
 
     if (visible) {
@@ -356,6 +376,8 @@ void SplashWindow_Show(Boolean visible)
         HideWindow(sWindow);
         sIsVisible = false;
     }
+
+    return true;
 }
 
 /* Determine if the window is visible */
