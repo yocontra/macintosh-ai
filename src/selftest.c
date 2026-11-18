@@ -19,6 +19,7 @@
 #include <Memory.h>
 #include <Sound.h>
 #include <string.h>
+#include <TextUtils.h>
 #include <Script.h>
 
 #include "constants.h"
@@ -32,8 +33,61 @@
 
 static const unsigned char kTriggerName[] = "\pMacintoshAI selftest";
 static const unsigned char kLogName[] = "\pMacintoshAI selftest log";
+#define LOG_FILE_NAME "MacintoshAI selftest log"
 
 static short sLogRef = -1;
+
+/* Where the log goes.
+ *
+ * Preferred: the harness's shared folder. macintosh-ai's log came back as a
+ * run of zero bytes when it lived in System Folder:Preferences - the harness
+ * kills SheepShaver and then mounts the clone, and the guest's cached data
+ * blocks never reached the volume, whatever FlushFile/FlushVol were asked to
+ * do. The extfs share is a plain host directory, so a write is a write.
+ *
+ * Fallback: the Preferences folder, next to the trigger, if there is no Unix
+ * volume (running outside the harness). */
+static OSErr FindVolumeByName(ConstStr255Param name, short *vRefNum)
+{
+    short index;
+    HParamBlockRec pb;
+
+    for (index = 1; index < 64; index++) {
+        Str63 vname;
+
+        memset(&pb, 0, sizeof(pb));
+        memset(vname, 0, sizeof(vname));
+        pb.volumeParam.ioNamePtr = vname;
+        pb.volumeParam.ioVolIndex = index;
+        if (PBHGetVInfoSync((HParmBlkPtr)&pb) != noErr) {
+            break;
+        }
+        if (EqualString(vname, name, false, false)) {
+            *vRefNum = pb.volumeParam.ioVRefNum;
+            return noErr;
+        }
+    }
+    return nsvErr;
+}
+
+static Boolean FindPrefsFolder(FSSpec *spec, ConstStr255Param name);
+
+/* Build the FSSpec for the log, preferring the share. */
+static Boolean LogSpec(FSSpec *spec)
+{
+    short vRefNum;
+
+    if (spec == NULL) {
+        return false;
+    }
+
+    if (FindVolumeByName("\pUnix", &vRefNum) == noErr &&
+        FSMakeFSSpec(vRefNum, 0, "\p" LOG_FILE_NAME, spec) != paramErr) {
+        return true;
+    }
+
+    return FindPrefsFolder(spec, kLogName);
+}
 
 /* ---------------------------------------------------------------- */
 /* Locating and writing the log                                      */
@@ -164,7 +218,7 @@ static Boolean OpenLog(void)
     FSSpec spec;
     OSErr err;
 
-    if (!FindPrefsFolder(&spec, kLogName)) {
+    if (!LogSpec(&spec)) {
         return false;
     }
 

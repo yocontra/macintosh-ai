@@ -2,6 +2,13 @@
 
 ## Two ways to run this, and why the second one exists
 
+**`selftest.sh` — input-free, the default, and green.**
+The log is written to the harness's extfs share, not to the guest's HFS volume:
+a log in `System Folder:Preferences` read back as a run of zero bytes after the
+VM was killed (the data blocks never reached the volume), while a write to the
+share is a write to a host directory. `selftest.sh` reads
+`.work/share/MacintoshAI selftest log` and asserts the `done` line.
+
 **`selftest.sh` — input-free, the default.** The application looks for a file
 called `MacintoshAI selftest` in the guest's `System Folder:Preferences` at
 startup. When it is there it drives its own UI (open the chat window, type a

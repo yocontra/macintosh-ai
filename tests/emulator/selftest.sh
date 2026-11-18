@@ -66,6 +66,18 @@ echo "== stopping the VM"
 sleep 2
 
 echo "== reading the log"
+SHARE_LOG="$WORK/share/$LOG_NAME"
+if [ -f "$SHARE_LOG" ]; then
+    echo "   (from the extfs share)"
+    tr '\r' '\n' < "$SHARE_LOG" | tee "$WORK/selftest.log"
+    if grep -q '^done$' "$WORK/selftest.log"; then
+        echo "PASS: selftest"
+        exit 0
+    fi
+    echo "FAIL: selftest log has no 'done' line" >&2
+    exit 1
+fi
+
 mkdir -p "$MNT"
 diskutil image attach --mountOptions nobrowse --mountPoint "$MNT" \
     "$WORK/MacOS9Test.sparsebundle" >/dev/null 2>&1 \
