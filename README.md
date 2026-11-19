@@ -5,6 +5,9 @@ Gemini, OpenRouter or any OpenAI-compatible endpoint over HTTPS directly from
 System 7 — no bridge machine, no proxy — and falls back to two offline models
 when there is no network.
 
+<img src="docs/img/splash.png" alt="Macintosh AI splash: black AI mark, Chicago title, Start Chat default button" width="49%">
+<img src="docs/img/chat.png" alt="Macintosh AI chat window: header strip, transcript with the model's greeting, message field" width="49%">
+
 ## What works
 
 - **Remote AI, streamed.** Requests go out from the Mac over TLS 1.3 using a

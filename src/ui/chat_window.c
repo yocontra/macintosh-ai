@@ -419,7 +419,14 @@ static void DrawChatHeader(void)
 
     Chat_HeaderRect(&header);
 
-    BackPat(&qd.ltGray);
+    /* Solid grey strip: a 1-bit pattern here dithers into stripes on a colour
+     * display and the app name and status became unreadable. */
+    {
+        static const RGBColor headerTint = {0xCCCC, 0xCCCC, 0xCCCC};
+
+        RGBBackColor(&headerTint);
+    }
+    BackPat(&qd.white);
     EraseRect(&header);
 
     TextFont(kFontGeneva);
